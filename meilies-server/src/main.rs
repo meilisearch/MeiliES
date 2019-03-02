@@ -71,8 +71,10 @@ fn main() {
 
                         tokio::spawn(poll_fn(move || {
                             let stream = stream.clone(); // o_O wtf !!!?
+
                             tokio_threadpool::blocking(|| {
                                 let tree = db.open_tree(stream.into_bytes()).unwrap();
+
                                 for event in tree.watch_prefix(vec![]) {
                                     if let Event::Set(k, v) = event {
                                         tx.try_send((k, v.to_vec())).unwrap();
@@ -93,11 +95,13 @@ fn main() {
             });
 
             let writes = responses.fold(writer, |writer, result: Result<_, RespMsgError>| {
-
-                let command_return = result.unwrap();
+                let command_return = match result {
+                    Ok(command_return) => command_return,
+                    Err(e) => return Either::A(writer.send(RespValue::error(e))),
+                };
 
                 match command_return {
-                    CommandReturn::Publish => Either::A(writer.send(RespValue::ok())),
+                    CommandReturn::Publish => Either::A(writer.send(RespValue::string("OK"))),
                     CommandReturn::Subscribe(receiver) => {
                         let keys_values = receiver
                             .map(|(k, v)| {

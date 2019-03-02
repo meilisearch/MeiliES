@@ -22,8 +22,12 @@ pub enum RespValue {
 }
 
 impl RespValue {
-    pub fn ok() -> RespValue {
-        RespValue::SimpleString(String::from("OK"))
+    pub fn string(string: impl fmt::Display) -> RespValue {
+        RespValue::SimpleString(string.to_string())
+    }
+
+    pub fn error(string: impl fmt::Display) -> RespValue {
+        RespValue::Error(string.to_string())
     }
 }
 
@@ -65,6 +69,31 @@ pub enum RespMsgError {
     SimpleStringContainCrlf,
     MissingBulkStringFinalCrlf,
     IoError(io::Error),
+}
+
+impl fmt::Display for RespMsgError {
+    fn fmt(&self, fmt: &mut fmt::Formatter) -> fmt::Result {
+        match self {
+            RespMsgError::InvalidPrefixByte(byte) => {
+                write!(fmt, "InvalidPrefixByte: {:?}", byte)
+            },
+            RespMsgError::InvalidInteger(error) => {
+                write!(fmt, "InvalidInteger: {}", error)
+            },
+            RespMsgError::InvalidUtf8String(error) => {
+                write!(fmt, "InvalidUtf8String: {}", error)
+            },
+            RespMsgError::SimpleStringContainCrlf => {
+                write!(fmt, "SimpleStringContainCrlf")
+            },
+            RespMsgError::MissingBulkStringFinalCrlf => {
+                write!(fmt, "MissingBulkStringFinalCrlf")
+            },
+            RespMsgError::IoError(error) => {
+                write!(fmt, "IoError: {}", error)
+            },
+        }
+    }
 }
 
 impl From<io::Error> for RespMsgError {
