@@ -1,4 +1,4 @@
-use std::str;
+use std::{str, num};
 
 use bytes::{BufMut, BytesMut};
 use subslice::SubsliceExt;
@@ -29,6 +29,8 @@ pub enum RespValue {
 #[derive(Debug)]
 pub enum RespMsgError {
     InvalidPrefixByte(u8),
+    InvalidInteger(num::ParseIntError),
+    InvalidUtf8String(str::Utf8Error),
     SimpleStringContainCrlf,
     MissingBulkStringFinalCrlf,
     IoError(io::Error),
@@ -40,6 +42,18 @@ impl From<io::Error> for RespMsgError {
     }
 }
 
+impl From<num::ParseIntError> for RespMsgError {
+    fn from(error: num::ParseIntError) -> RespMsgError {
+        RespMsgError::InvalidInteger(error)
+    }
+}
+
+impl From<str::Utf8Error> for RespMsgError {
+    fn from(error: str::Utf8Error) -> RespMsgError {
+        RespMsgError::InvalidUtf8String(error)
+    }
+}
+
 fn decode_until_crlf(buf: &[u8]) -> Option<&[u8]> {
     buf.find(CRLF_NEWLINE).map(|off| buf.split_at(off).0)
 }
@@ -47,9 +61,9 @@ fn decode_until_crlf(buf: &[u8]) -> Option<&[u8]> {
 fn decode_simple_string(buf: &[u8]) -> Result<Option<(RespValue, usize)>, RespMsgError> {
     match decode_until_crlf(buf) {
         Some(bytes_string) => {
-            let string = str::from_utf8(bytes_string).unwrap().to_owned();
+            let string = str::from_utf8(bytes_string)?;
             let advance = bytes_string.len() + CRLF_NEWLINE.len();
-            Ok(Some((RespValue::SimpleString(string), advance)))
+            Ok(Some((RespValue::SimpleString(string.to_owned()), advance)))
         },
         None => Ok(None),
     }
@@ -58,9 +72,9 @@ fn decode_simple_string(buf: &[u8]) -> Result<Option<(RespValue, usize)>, RespMs
 fn decode_error(buf: &[u8]) -> Result<Option<(RespValue, usize)>, RespMsgError> {
     match decode_until_crlf(buf) {
         Some(bytes_string) => {
-            let string = str::from_utf8(bytes_string).unwrap().to_owned();
+            let string = str::from_utf8(bytes_string)?;
             let advance = bytes_string.len() + CRLF_NEWLINE.len();
-            Ok(Some((RespValue::Error(string), advance)))
+            Ok(Some((RespValue::Error(string.to_owned()), advance)))
         },
         None => Ok(None),
     }
@@ -69,8 +83,8 @@ fn decode_error(buf: &[u8]) -> Result<Option<(RespValue, usize)>, RespMsgError> 
 fn decode_integer(buf: &[u8]) -> Result<Option<(RespValue, usize)>, RespMsgError> {
     match decode_until_crlf(buf) {
         Some(bytes_string) => {
-            let string = str::from_utf8(bytes_string).unwrap();
-            let integer = i64::from_str_radix(string, 10).unwrap();
+            let string = str::from_utf8(bytes_string)?;
+            let integer = i64::from_str_radix(string, 10)?;
             let advance = bytes_string.len() + CRLF_NEWLINE.len();
             Ok(Some((RespValue::Integer(integer), advance)))
         },
@@ -81,8 +95,8 @@ fn decode_integer(buf: &[u8]) -> Result<Option<(RespValue, usize)>, RespMsgError
 fn decode_bulk_string(buf: &[u8]) -> Result<Option<(RespValue, usize)>, RespMsgError> {
     match decode_until_crlf(buf) {
         Some(bytes_string) => {
-            let string = str::from_utf8(bytes_string).unwrap();
-            let length = i64::from_str_radix(string, 10).unwrap();
+            let string = str::from_utf8(bytes_string)?;
+            let length = i64::from_str_radix(string, 10)?;
 
             let advance = bytes_string.len() + CRLF_NEWLINE.len();
             let buf = &buf[advance..];
@@ -114,8 +128,8 @@ fn decode_bulk_string(buf: &[u8]) -> Result<Option<(RespValue, usize)>, RespMsgE
 fn decode_array(buf: &[u8]) -> Result<Option<(RespValue, usize)>, RespMsgError> {
     match decode_until_crlf(buf) {
         Some(bytes_string) => {
-            let string = str::from_utf8(bytes_string).unwrap();
-            let length = i64::from_str_radix(string, 10).unwrap();
+            let string = str::from_utf8(bytes_string)?;
+            let length = i64::from_str_radix(string, 10)?;
 
             let mut advance = bytes_string.len() + CRLF_NEWLINE.len();
 
