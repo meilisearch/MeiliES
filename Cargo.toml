@@ -1,0 +1,6 @@
+[workspace]
+members = [
+    "meilies",
+    "meilies-client",
+    "meilies-server",
+]
