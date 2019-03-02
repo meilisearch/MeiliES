@@ -1,10 +1,9 @@
-use std::{str, mem};
-use std::io::{Cursor, BufRead};
+use std::str;
 
-use bytes::{BufMut, BytesMut, buf::FromBuf};
+use bytes::{BufMut, BytesMut};
 use subslice::SubsliceExt;
+use tokio::codec::{Encoder, Decoder};
 use tokio::io;
-use tokio::codec::{Framed, Encoder, Decoder};
 
 const CRLF_NEWLINE: &[u8; 2] = &[b'\r', b'\n'];
 const SIMPLE_STRING_CHAR:  u8 = b'+';
