@@ -1,4 +1,4 @@
-use std::{str, num};
+use std::{fmt, num, str};
 
 use bytes::{BufMut, BytesMut};
 use subslice::SubsliceExt;
@@ -12,18 +12,43 @@ const INTEGER_CHAR:        u8 = b':';
 const BULK_STRING_CHAR:    u8 = b'$';
 const ARRAY_CHAR:          u8 = b'*';
 
-// For Simple Strings the first byte of the reply is "+"
-// For Errors the first byte of the reply is "-"
-// For Integers the first byte of the reply is ":"
-// For Bulk Strings the first byte of the reply is "$"
-// For Arrays the first byte of the reply is "*"
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Clone, PartialEq, Eq)]
 pub enum RespValue {
     SimpleString(String),
     Error(String),
     Integer(i64),
     BulkString(Option<Vec<u8>>),
     Array(Option<Vec<RespValue>>),
+}
+
+impl fmt::Debug for RespValue {
+    fn fmt(&self, fmt: &mut fmt::Formatter) -> fmt::Result {
+        match self {
+            RespValue::SimpleString(string) => {
+                fmt.debug_tuple("SimpleString").field(&string).finish()
+            },
+            RespValue::Error(string) => {
+                fmt.debug_tuple("Error").field(&string).finish()
+            },
+            RespValue::Integer(integer) => {
+                fmt.debug_tuple("Integer").field(&integer).finish()
+            },
+            RespValue::BulkString(value) => {
+                let mut dbg = fmt.debug_tuple("BulkString");
+
+                match value.as_ref().map(|v| (v, str::from_utf8(v))) {
+                    Some((_, Ok(value))) => dbg.field(&value),
+                    Some((value, Err(_))) => dbg.field(&value),
+                    none => dbg.field(&none),
+                };
+
+                dbg.finish()
+            },
+            RespValue::Array(elements) => {
+                fmt.debug_tuple("Array").field(&elements).finish()
+            },
+        }
+    }
 }
 
 #[derive(Debug)]
