@@ -8,6 +8,7 @@ use log::{info, error};
 use sled::Db;
 
 use meilies::codec::{RespCodec, RespValue, RespMsgError};
+use meilies::command::{Command, arguments_from_resp_value};
 
 fn main() {
     let _ = env_logger::init();
@@ -36,22 +37,31 @@ fn main() {
             let _db = db.clone();
             let responses = reader.map(|value| {
 
-                println!("{:?}", value);
+                println!("received: {:?}", value);
 
-                Ok(value)
+                let args = arguments_from_resp_value(value).unwrap();
+                let command = Command::from_args(args).unwrap();
+
+                println!("command: {:?}", command);
+
+                Ok(RespValue::SimpleString("OK".to_string()))
+
+            })
+            .map_err(|e| {
+                // FIXME return the error to the client
+                println!("{:?}", e);
+                e
             });
 
-            let writes = responses.fold(writer, |writer, value: Result<RespValue, RespMsgError>| {
-
-                println!("{:?}", value);
-
-                match value {
+            let writes = responses.fold(writer, |writer, result: Result<_, RespMsgError>| {
+                match result {
                     Ok(value) => writer.send(value),
-                    Err(_e) => writer.send(RespValue::Error("Whoops an error occured!".to_owned())),
+                    Err(e) => writer.send(RespValue::Error(format!("{:?}", e))),
                 }
             });
 
             let msg = writes.then(|_| Ok(()));
+
             tokio::spawn(msg)
         });
 
