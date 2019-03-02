@@ -1,14 +1,22 @@
-use std::env;
+use std::{env, str};
 use std::time::Instant;
 
+use byteorder::{BigEndian, ReadBytesExt, WriteBytesExt};
+use futures::future::poll_fn;
+use log::{info, error};
+use sled::{Db, Event};
+use tokio::codec::Decoder;
 use tokio::net::TcpListener;
 use tokio::prelude::*;
-use tokio::codec::Decoder;
-use log::{info, error};
-use sled::Db;
+use tokio::sync::mpsc;
 
 use meilies::codec::{RespCodec, RespValue, RespMsgError};
 use meilies::command::{Command, arguments_from_resp_value};
+
+enum CommandReturn {
+    Publish,
+    Subscribe(mpsc::Receiver<(Vec<u8>, Vec<u8>)>),
+}
 
 fn main() {
     let _ = env_logger::init();
@@ -34,8 +42,8 @@ fn main() {
             let framed = RespCodec::default().framed(socket);
             let (writer, reader) = framed.split();
 
-            let _db = db.clone();
-            let responses = reader.map(|value| {
+            let db = db.clone();
+            let responses = reader.map(move |value| {
 
                 println!("received: {:?}", value);
 
@@ -44,7 +52,37 @@ fn main() {
 
                 println!("command: {:?}", command);
 
-                Ok(RespValue::SimpleString("OK".to_string()))
+                match command {
+                    Command::Publish { stream, event } => {
+                        let tree = db.open_tree(stream.into_bytes()).unwrap();
+
+                        let unique_id = db.generate_id().unwrap() as u64;
+                        let mut unique_id_buff = Vec::new();
+                        let _ = unique_id_buff.write_u64::<BigEndian>(unique_id);
+
+                        tree.set(unique_id_buff, event).unwrap();
+
+                        Ok(CommandReturn::Publish)
+                    },
+                    Command::Subscribe { stream } => {
+                        let db = db.clone();
+                        let (mut tx, rx) = mpsc::channel(100);
+
+                        tokio::spawn(poll_fn(move || {
+                            let stream = stream.clone(); // o_O wtf !!!?
+                            tokio_threadpool::blocking(|| {
+                                let tree = db.open_tree(stream.into_bytes()).unwrap();
+                                for event in tree.watch_prefix(vec![]) {
+                                    if let Event::Set(k, v) = event {
+                                        tx.try_send((k, v.to_vec())).unwrap();
+                                    }
+                                }
+                            }).map_err(|e| error!("{}", e))
+                        }));
+
+                        Ok(CommandReturn::Subscribe(rx))
+                    }
+                }
 
             })
             .map_err(|e| {
@@ -53,10 +91,22 @@ fn main() {
                 e
             });
 
-            let writes = responses.fold(writer, |writer, result: Result<_, RespMsgError>| {
-                match result {
-                    Ok(value) => writer.send(value),
-                    Err(e) => writer.send(RespValue::Error(format!("{:?}", e))),
+            let writes = responses.fold(writer, |writer, result: Result<_, RespMsgError>| -> Box<Future<Item = _, Error = _> + Send> {
+
+                let command_return = result.unwrap();
+
+                match command_return {
+                    CommandReturn::Publish => Box::new(writer.send(RespValue::ok())),
+                    CommandReturn::Subscribe(receiver) => {
+                        let keys_values = receiver
+                            .map(|(k, v)| {
+                                let key = k.as_slice().read_u64::<BigEndian>().unwrap();
+                                let value = str::from_utf8(&v).unwrap();
+                                RespValue::SimpleString(format!("{} -- {}", key, value))
+                            })
+                            .map_err(|e| std::io::ErrorKind::Interrupted);
+                        Box::new(writer.send_all(keys_values).map(|(s, _)| s))
+                    }
                 }
             });
 

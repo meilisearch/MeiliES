@@ -21,6 +21,12 @@ pub enum RespValue {
     Array(Option<Vec<RespValue>>),
 }
 
+impl RespValue {
+    pub fn ok() -> RespValue {
+        RespValue::SimpleString(String::from("OK"))
+    }
+}
+
 impl fmt::Debug for RespValue {
     fn fmt(&self, fmt: &mut fmt::Formatter) -> fmt::Result {
         match self {
@@ -64,6 +70,12 @@ pub enum RespMsgError {
 impl From<io::Error> for RespMsgError {
     fn from(error: io::Error) -> RespMsgError {
         RespMsgError::IoError(error)
+    }
+}
+
+impl From<io::ErrorKind> for RespMsgError {
+    fn from(error: io::ErrorKind) -> RespMsgError {
+        RespMsgError::IoError(error.into())
     }
 }
 
