@@ -3,6 +3,7 @@ use std::time::Instant;
 
 use byteorder::{BigEndian, ReadBytesExt, WriteBytesExt};
 use futures::future::poll_fn;
+use futures::future::Either;
 use log::{info, error};
 use sled::{Db, Event};
 use tokio::codec::Decoder;
@@ -91,12 +92,12 @@ fn main() {
                 e
             });
 
-            let writes = responses.fold(writer, |writer, result: Result<_, RespMsgError>| -> Box<Future<Item = _, Error = _> + Send> {
+            let writes = responses.fold(writer, |writer, result: Result<_, RespMsgError>| {
 
                 let command_return = result.unwrap();
 
                 match command_return {
-                    CommandReturn::Publish => Box::new(writer.send(RespValue::ok())),
+                    CommandReturn::Publish => Either::A(writer.send(RespValue::ok())),
                     CommandReturn::Subscribe(receiver) => {
                         let keys_values = receiver
                             .map(|(k, v)| {
@@ -105,7 +106,7 @@ fn main() {
                                 RespValue::SimpleString(format!("{} -- {}", key, value))
                             })
                             .map_err(|e| std::io::ErrorKind::Interrupted);
-                        Box::new(writer.send_all(keys_values).map(|(s, _)| s))
+                        Either::B(writer.send_all(keys_values).map(|(s, _)| s))
                     }
                 }
             });
