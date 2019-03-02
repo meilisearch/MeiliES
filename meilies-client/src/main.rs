@@ -9,7 +9,7 @@ use log::error;
 use meilies::codec::{RespValue, RespCodec};
 
 fn main() {
-    let _ = env_logger::init();
+    let _ = stderrlog::new().color(stderrlog::ColorChoice::Never).verbosity(2).init();
 
     let addr = env::args().nth(1).unwrap_or("127.0.0.1:8080".into());
     let addr = match addr.parse() {
