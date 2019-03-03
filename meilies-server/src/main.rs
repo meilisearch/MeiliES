@@ -12,7 +12,7 @@ use tokio::prelude::*;
 use tokio::sync::mpsc;
 
 use meilies::codec::{RespCodec, RespValue, RespMsgError};
-use meilies::command::{Command, arguments_from_resp_value};
+use meilies::command::{Command, CommandError, arguments_from_resp_value};
 
 enum CommandReturn {
     Publish,
@@ -48,7 +48,10 @@ fn main() {
 
                 println!("received: {:?}", value);
 
-                let args = arguments_from_resp_value(value).unwrap();
+                let args = match arguments_from_resp_value(value) {
+                    Ok(args) => args,
+                    Err(_) => return Err(CommandError::CommandNotFound),
+                };
                 let command = Command::from_args(args).unwrap();
 
                 println!("command: {:?}", command);
@@ -94,7 +97,7 @@ fn main() {
                 e
             });
 
-            let writes = responses.fold(writer, |writer, result: Result<_, RespMsgError>| {
+            let writes = responses.fold(writer, |writer, result: Result<_, CommandError>| {
                 let command_return = match result {
                     Ok(command_return) => command_return,
                     Err(e) => return Either::A(writer.send(RespValue::error(e))),

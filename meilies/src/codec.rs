@@ -29,6 +29,10 @@ impl RespValue {
     pub fn error(string: impl fmt::Display) -> RespValue {
         RespValue::Error(string.to_string())
     }
+
+    pub fn bulk_string(string: Option<impl Into<Vec<u8>>>) -> RespValue {
+        RespValue::BulkString(string.map(Into::into))
+    }
 }
 
 impl fmt::Debug for RespValue {

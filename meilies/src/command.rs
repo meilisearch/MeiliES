@@ -55,6 +55,25 @@ pub enum CommandError {
     InvalidUtf8String(str::Utf8Error),
 }
 
+impl fmt::Display for CommandError {
+    fn fmt(&self, fmt: &mut fmt::Formatter) -> fmt::Result {
+        match self {
+            CommandError::CommandNotFound => {
+                write!(fmt, "command not found")
+            },
+            CommandError::MissingCommandName => {
+                write!(fmt, "missing command name")
+            },
+            CommandError::InvalidNumberOfArguments { expected } => {
+                write!(fmt, "invalid number of arguments (expected {})", expected)
+            },
+            CommandError::InvalidUtf8String(error) => {
+                write!(fmt, "invalid utf8 string: {}", error)
+            },
+        }
+    }
+}
+
 impl From<str::Utf8Error> for CommandError {
     fn from(error: str::Utf8Error) -> CommandError {
         CommandError::InvalidUtf8String(error)

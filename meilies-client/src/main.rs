@@ -25,18 +25,19 @@ fn main() {
             let framed = RespCodec::default().framed(socket);
             let (writer, reader) = framed.split();
 
-            let first_command = stream::once(Ok(RespValue::string("hello")));
+            let command = RespValue::Array(Some(vec![
+                RespValue::bulk_string(Some("subscribe")),
+                RespValue::bulk_string(Some("my-little-stream")),
+            ]));
 
-            let responses = reader.map(move |line| {
-                println!("received: {:?}", line);
-                line
-            });
+            let writes = writer.send(command);
 
-            let responses = first_command.chain(responses);
+            let messages = reader.for_each(|value| {
+                println!("received: {:?}", value);
+                Ok(())
+            }).then(|_| Ok(()));
 
-            let writes = responses.fold(writer, |writer, response| {
-                writer.send(response)
-            });
+            tokio::spawn(messages);
 
             writes.then(|_| Ok(()))
         });
