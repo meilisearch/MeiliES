@@ -1,5 +1,6 @@
-use std::{env, str};
+use std::ops::{Bound::Excluded, Bound::Unbounded};
 use std::time::Instant;
+use std::{env, str};
 
 use byteorder::{BigEndian, ReadBytesExt, WriteBytesExt};
 use futures::future::poll_fn;
@@ -11,7 +12,7 @@ use tokio::net::TcpListener;
 use tokio::prelude::*;
 use tokio::sync::mpsc;
 
-use meilies::codec::{RespCodec, RespValue, RespMsgError};
+use meilies::codec::{RespCodec, RespValue};
 use meilies::command::{Command, CommandError, arguments_from_resp_value};
 
 enum CommandReturn {
@@ -22,7 +23,7 @@ enum CommandReturn {
 fn main() {
     let _ = env_logger::init();
 
-    let addr = env::args().nth(1).unwrap_or("127.0.0.1:8080".into());
+    let addr = env::args().nth(1).unwrap_or("127.0.0.1:6480".into());
     let addr = match addr.parse() {
         Ok(addr) => addr,
         Err(e) => return error!("error pasing addr; {}", e),
@@ -52,7 +53,11 @@ fn main() {
                     Ok(args) => args,
                     Err(_) => return Err(CommandError::CommandNotFound),
                 };
-                let command = Command::from_args(args).unwrap();
+
+                let command = match Command::from_args(args) {
+                    Ok(command) => command,
+                    Err(e) => return Err(e),
+                };
 
                 println!("command: {:?}", command);
 
@@ -68,7 +73,7 @@ fn main() {
 
                         Ok(CommandReturn::Publish)
                     },
-                    Command::Subscribe { stream } => {
+                    Command::Subscribe { stream, from } => {
                         let db = db.clone();
                         let (mut tx, rx) = mpsc::channel(100);
 
@@ -78,12 +83,48 @@ fn main() {
                             tokio_threadpool::blocking(|| {
                                 let tree = db.open_tree(stream.into_bytes()).unwrap();
 
-                                for event in tree.watch_prefix(vec![]) {
-                                    if let Event::Set(k, v) = event {
-                                        tx.try_send((k, v.to_vec())).unwrap();
+                                let mut watcher = tree.watch_prefix(vec![]);
+                                let mut last_loop_unique_id = None;
+
+                                if from == 0 {
+                                    loop {
+                                        // reset the watcher at each new loop
+                                        watcher = tree.watch_prefix(vec![]);
+
+                                        // if this is not the first time: skip the last unique id seen
+                                        let range = match last_loop_unique_id.take() {
+                                            Some(id) => (Excluded(id), Unbounded),
+                                            None     => (Unbounded,    Unbounded),
+                                        };
+
+                                        let mut has_more_events = false;
+
+                                        for result in tree.range(range) {
+                                            has_more_events = true;
+
+                                            let (k, v) = result.unwrap();
+                                            last_loop_unique_id = Some(k.clone());
+                                            let value = str::from_utf8(&v).unwrap();
+                                            if let Err(e) = tx.start_send((k, v.to_vec())) {
+                                                error!("start send error: {}", e);
+                                                break
+                                            }
+                                        }
+
+                                        if !has_more_events { break }
                                     }
                                 }
-                            }).map_err(|e| error!("{}", e))
+
+                                for event in watcher {
+                                    if let Event::Set(k, v) = event {
+                                        if let Err(e) = tx.start_send((k, v.to_vec())) {
+                                            error!("start send error: {}", e);
+                                            break
+                                        }
+                                    }
+                                }
+                            })
+                            .map_err(|e| error!("{}", e))
                         }));
 
                         Ok(CommandReturn::Subscribe(rx))
@@ -112,7 +153,10 @@ fn main() {
                                 let value = str::from_utf8(&v).unwrap();
                                 RespValue::SimpleString(format!("{} -- {}", key, value))
                             })
-                            .map_err(|e| std::io::ErrorKind::Interrupted);
+                            .map_err(|e| {
+                                eprintln!("error: {}", e);
+                                std::io::ErrorKind::Interrupted
+                            });
                         Either::B(writer.send_all(keys_values).map(|(s, _)| s))
                     }
                 }

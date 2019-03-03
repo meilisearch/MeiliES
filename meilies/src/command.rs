@@ -23,7 +23,7 @@ pub fn arguments_from_resp_value(value: RespValue) -> Result<Vec<Vec<u8>>, ()> {
 
 pub enum Command {
     Publish { stream: String, event: Vec<u8> },
-    Subscribe { stream: String },
+    Subscribe { stream: String, from: i64 },
 }
 
 impl fmt::Debug for Command {
@@ -38,9 +38,10 @@ impl fmt::Debug for Command {
                 };
                 dbg.finish()
             },
-            Command::Subscribe { stream } => {
+            Command::Subscribe { stream, from } => {
                 fmt.debug_struct("Subscribe")
                     .field("stream", &stream)
+                    .field("from", &from)
                     .finish()
             }
         }
@@ -107,9 +108,24 @@ impl Command {
             },
             "subscribe" => {
                 match (args.next(), args.next()) {
-                    (Some(stream), None) => {
-                        let stream = String::from_utf8(stream)?;
-                        Ok(Command::Subscribe { stream })
+                    (Some(mut stream), None) => {
+                        match stream.iter().position(|c| *c == b':') {
+                            Some(colon_offset) => {
+                                let from = stream.split_off(colon_offset + 1);
+                                stream.pop(); // remove the colon itself
+
+                                let stream = String::from_utf8(stream)?;
+
+                                let from = str::from_utf8(&from)?;
+                                let from = i64::from_str_radix(from, 10).unwrap();
+
+                                Ok(Command::Subscribe { stream, from })
+                            },
+                            None => {
+                                let stream = String::from_utf8(stream)?;
+                                Ok(Command::Subscribe { stream, from: -1 })
+                            }
+                        }
                     },
                     _ => Err(CommandError::InvalidNumberOfArguments { expected: 2 })
                 }
