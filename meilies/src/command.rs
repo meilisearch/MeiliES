@@ -50,6 +50,7 @@ impl fmt::Debug for Command {
 
 #[derive(Debug)]
 pub enum CommandError {
+    InvalidStreamName,
     CommandNotFound,
     MissingCommandName,
     InvalidNumberOfArguments { expected: usize },
@@ -59,6 +60,9 @@ pub enum CommandError {
 impl fmt::Display for CommandError {
     fn fmt(&self, fmt: &mut fmt::Formatter) -> fmt::Result {
         match self {
+            CommandError::InvalidStreamName => {
+                write!(fmt, "invalid stream name")
+            },
             CommandError::CommandNotFound => {
                 write!(fmt, "command not found")
             },
@@ -100,6 +104,10 @@ impl Command {
             "publish" => {
                 match (args.next(), args.next(), args.next()) {
                     (Some(stream), Some(event), None) => {
+                        if stream.contains(&b':') {
+                            return Err(CommandError::InvalidStreamName)
+                        }
+
                         let stream = String::from_utf8(stream)?;
                         Ok(Command::Publish { stream, event })
                     },
