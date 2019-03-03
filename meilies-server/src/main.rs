@@ -26,7 +26,7 @@ fn main() {
     let addr = env::args().nth(1).unwrap_or("127.0.0.1:6480".into());
     let addr = match addr.parse() {
         Ok(addr) => addr,
-        Err(e) => return error!("error pasing addr; {}", e),
+        Err(e) => return error!("error parsing addr; {}", e),
     };
 
     let now = Instant::now();
@@ -84,9 +84,10 @@ fn main() {
                                 let tree = db.open_tree(stream.into_bytes()).unwrap();
 
                                 let mut watcher = tree.watch_prefix(vec![]);
+                                let mut event_number = 0;
                                 let mut last_loop_unique_id = None;
 
-                                if from == 0 {
+                                if from >= 0 {
                                     loop {
                                         // reset the watcher at each new loop
                                         watcher = tree.watch_prefix(vec![]);
@@ -104,11 +105,14 @@ fn main() {
 
                                             let (k, v) = result.unwrap();
                                             last_loop_unique_id = Some(k.clone());
-                                            let value = str::from_utf8(&v).unwrap();
-                                            if let Err(e) = tx.start_send((k, v.to_vec())) {
-                                                error!("start send error: {}", e);
-                                                break
+                                            if event_number >= from {
+                                                if let Err(e) = tx.start_send((k, v.to_vec())) {
+                                                    error!("start send error: {}", e);
+                                                    break
+                                                }
                                             }
+
+                                            event_number += 1;
                                         }
 
                                         if !has_more_events { break }
@@ -117,10 +121,14 @@ fn main() {
 
                                 for event in watcher {
                                     if let Event::Set(k, v) = event {
-                                        if let Err(e) = tx.start_send((k, v.to_vec())) {
-                                            error!("start send error: {}", e);
-                                            break
+                                        if event_number >= from {
+                                            if let Err(e) = tx.start_send((k, v.to_vec())) {
+                                                error!("start send error: {}", e);
+                                                break
+                                            }
                                         }
+
+                                        event_number += 1;
                                     }
                                 }
                             })
