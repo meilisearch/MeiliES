@@ -2,7 +2,6 @@ use std::ops::{Bound::Excluded, Bound::Unbounded};
 use std::time::Instant;
 use std::{env, str};
 
-use byteorder::{BigEndian, ReadBytesExt, WriteBytesExt};
 use futures::future::poll_fn;
 use futures::future::Either;
 use log::{info, error};
@@ -12,12 +11,15 @@ use tokio::net::TcpListener;
 use tokio::prelude::*;
 use tokio::sync::mpsc;
 
+mod event_id;
+
 use meilies::codec::{RespCodec, RespValue};
 use meilies::command::{Command, CommandError, arguments_from_resp_value};
+use event_id::EventId;
 
 enum CommandReturn {
     Publish,
-    Subscribe(mpsc::Receiver<(Vec<u8>, Vec<u8>)>),
+    Subscribe(mpsc::UnboundedReceiver<(EventId, Vec<u8>)>),
 }
 
 fn main() {
@@ -65,17 +67,14 @@ fn main() {
                     Command::Publish { stream, event } => {
                         let tree = db.open_tree(stream.into_bytes()).unwrap();
 
-                        let unique_id = db.generate_id().unwrap() as u64;
-                        let mut unique_id_buff = Vec::new();
-                        let _ = unique_id_buff.write_u64::<BigEndian>(unique_id);
-
-                        tree.set(unique_id_buff, event).unwrap();
+                        let event_id = EventId::from(db.generate_id().unwrap());
+                        tree.set(event_id, event).unwrap();
 
                         Ok(CommandReturn::Publish)
                     },
                     Command::Subscribe { stream, from } => {
                         let db = db.clone();
-                        let (mut tx, rx) = mpsc::channel(100);
+                        let (mut tx, rx) = mpsc::unbounded_channel();
 
                         tokio::spawn(poll_fn(move || {
                             let stream = stream.clone(); // o_O wtf !!!?
@@ -85,45 +84,54 @@ fn main() {
 
                                 let mut watcher = tree.watch_prefix(vec![]);
                                 let mut event_number = 0;
-                                let mut last_loop_unique_id = None;
 
                                 if from >= 0 {
-                                    loop {
+
+                                    let mut last_loop_event_id = None;
+                                    let mut has_more_events = true;
+
+                                    while has_more_events {
+
                                         // reset the watcher at each new loop
                                         watcher = tree.watch_prefix(vec![]);
 
                                         // if this is not the first time: skip the last unique id seen
-                                        let range = match last_loop_unique_id.take() {
+                                        let range = match last_loop_event_id.take() {
                                             Some(id) => (Excluded(id), Unbounded),
                                             None     => (Unbounded,    Unbounded),
                                         };
 
-                                        let mut has_more_events = false;
+                                        has_more_events = false;
 
                                         for result in tree.range(range) {
                                             has_more_events = true;
 
                                             let (k, v) = result.unwrap();
-                                            last_loop_unique_id = Some(k.clone());
+                                            let event_id = EventId::from_raw(&k).expect("BE event id");
+                                            last_loop_event_id = Some(k);
+
                                             if event_number >= from {
-                                                if let Err(e) = tx.start_send((k, v.to_vec())) {
-                                                    error!("start send error: {}", e);
+                                                if tx.start_send((event_id, v.to_vec())).is_err() {
+                                                    // The only way a send can fail is because
+                                                    // of a closed channel
+                                                    info!("encountered closed channel");
                                                     break
                                                 }
                                             }
 
                                             event_number += 1;
                                         }
-
-                                        if !has_more_events { break }
                                     }
                                 }
 
                                 for event in watcher {
                                     if let Event::Set(k, v) = event {
                                         if event_number >= from {
-                                            if let Err(e) = tx.start_send((k, v.to_vec())) {
-                                                error!("start send error: {}", e);
+                                            let event_id = EventId::from_raw(&k).unwrap();
+                                            if tx.start_send((event_id, v.to_vec())).is_err() {
+                                                // The only way a send can fail is because
+                                                // of a closed channel
+                                                info!("encountered closed channel");
                                                 break
                                             }
                                         }
@@ -156,10 +164,9 @@ fn main() {
                     CommandReturn::Publish => Either::A(writer.send(RespValue::string("OK"))),
                     CommandReturn::Subscribe(receiver) => {
                         let keys_values = receiver
-                            .map(|(k, v)| {
-                                let key = k.as_slice().read_u64::<BigEndian>().unwrap();
+                            .map(|(event_id, v)| {
                                 let value = str::from_utf8(&v).unwrap();
-                                RespValue::SimpleString(format!("{} -- {}", key, value))
+                                RespValue::SimpleString(format!("{:?} -- {}", event_id, value))
                             })
                             .map_err(|e| {
                                 eprintln!("error: {}", e);

@@ -4,3 +4,6 @@ members = [
     "meilies-client",
     "meilies-server",
 ]
+
+[profile.release]
+debug = true
