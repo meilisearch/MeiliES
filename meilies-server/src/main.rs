@@ -1,6 +1,6 @@
 use std::ops::{Bound::Excluded, Bound::Unbounded};
 use std::time::Instant;
-use std::{env, str};
+use std::{env, fmt, str};
 
 use futures::future::poll_fn;
 use futures::future::Either;
@@ -14,12 +14,58 @@ use tokio::sync::mpsc;
 mod event_id;
 
 use meilies::codec::{RespCodec, RespValue};
-use meilies::command::{Command, CommandError, arguments_from_resp_value};
+use meilies::command::{Command, CommandError};
 use event_id::EventId;
 
 enum CommandReturn {
     Publish,
     Subscribe(mpsc::UnboundedReceiver<(EventId, Vec<u8>)>),
+}
+
+enum Error {
+    InvalidRequest(RequestError),
+    InvalidCommand(CommandError),
+}
+
+impl fmt::Display for Error {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        match self {
+            Error::InvalidRequest(e) => writeln!(f, "invalid request; {}", e),
+            Error::InvalidCommand(e) => writeln!(f, "invalid command; {}", e),
+        }
+    }
+}
+
+enum RequestError {
+    NotAnArrayOfBulkStrings,
+}
+
+impl fmt::Display for RequestError {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        match self {
+            RequestError::NotAnArrayOfBulkStrings => {
+                writeln!(f, "requests must be an array of bulk strings")
+            },
+        }
+    }
+}
+
+fn resp_into_arguments(value: RespValue) -> Result<Vec<Vec<u8>>, RequestError> {
+    let array = match value {
+        RespValue::Array(Some(array)) => array,
+        _ => return Err(RequestError::NotAnArrayOfBulkStrings),
+    };
+
+    let mut args = Vec::with_capacity(array.len());
+
+    for value in array {
+        match value {
+            RespValue::BulkString(Some(buffer)) => args.push(buffer),
+            _ => return Err(RequestError::NotAnArrayOfBulkStrings),
+        }
+    }
+
+    Ok(args)
 }
 
 fn main() {
@@ -51,14 +97,14 @@ fn main() {
 
                 println!("received: {:?}", value);
 
-                let args = match arguments_from_resp_value(value) {
+                let args = match resp_into_arguments(value) {
                     Ok(args) => args,
-                    Err(_) => return Err(CommandError::CommandNotFound),
+                    Err(e) => return Err(Error::InvalidRequest(e)),
                 };
 
                 let command = match Command::from_args(args) {
                     Ok(command) => command,
-                    Err(e) => return Err(e),
+                    Err(e) => return Err(Error::InvalidCommand(e)),
                 };
 
                 println!("command: {:?}", command);
@@ -80,18 +126,17 @@ fn main() {
                             let stream = stream.clone(); // o_O wtf !!!?
 
                             tokio_threadpool::blocking(|| {
-                                let tree = db.open_tree(stream.into_bytes()).unwrap();
+                                info!("spawned blocking subscription");
 
+                                let tree = db.open_tree(stream.into_bytes()).unwrap();
                                 let mut watcher = tree.watch_prefix(vec![]);
                                 let mut event_number = 0;
 
                                 if from >= 0 {
-
                                     let mut last_loop_event_id = None;
                                     let mut has_more_events = true;
 
                                     while has_more_events {
-
                                         // reset the watcher at each new loop
                                         watcher = tree.watch_prefix(vec![]);
 
@@ -107,7 +152,7 @@ fn main() {
                                             has_more_events = true;
 
                                             let (k, v) = result.unwrap();
-                                            let event_id = EventId::from_raw(&k).expect("BE event id");
+                                            let event_id = EventId::from_raw(&k).expect("Big Endian event id");
                                             last_loop_event_id = Some(k);
 
                                             if event_number >= from {
@@ -154,7 +199,7 @@ fn main() {
                 e
             });
 
-            let writes = responses.fold(writer, |writer, result: Result<_, CommandError>| {
+            let writes = responses.fold(writer, |writer, result: Result<_, Error>| {
                 let command_return = match result {
                     Ok(command_return) => command_return,
                     Err(e) => return Either::A(writer.send(RespValue::error(e))),

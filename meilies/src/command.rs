@@ -1,26 +1,6 @@
 use std::{fmt, str, string};
 use crate::codec::RespValue;
 
-pub fn arguments_from_resp_value(value: RespValue) -> Result<Vec<Vec<u8>>, ()> {
-    match value {
-        RespValue::Array(Some(array)) => {
-            let mut args = Vec::new();
-
-            for value in array {
-                match value {
-                    RespValue::BulkString(Some(buffer)) => {
-                        args.push(buffer);
-                    },
-                    _ => return Err(()),
-                }
-            }
-
-            Ok(args)
-        },
-        _ => Err(())
-    }
-}
-
 pub enum Command {
     Publish { stream: String, event: Vec<u8> },
     Subscribe { stream: String, from: i64 },
