@@ -1,5 +1,4 @@
 use std::{fmt, str, string};
-use crate::codec::RespValue;
 
 pub enum Command {
     Publish { stream: String, event: Vec<u8> },
@@ -38,22 +37,22 @@ pub enum CommandError {
 }
 
 impl fmt::Display for CommandError {
-    fn fmt(&self, fmt: &mut fmt::Formatter) -> fmt::Result {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         match self {
             CommandError::InvalidStreamName => {
-                write!(fmt, "invalid stream name")
+                write!(f, "invalid stream name")
             },
             CommandError::CommandNotFound => {
-                write!(fmt, "command not found")
+                write!(f, "command not found")
             },
             CommandError::MissingCommandName => {
-                write!(fmt, "missing command name")
+                write!(f, "missing command name")
             },
             CommandError::InvalidNumberOfArguments { expected } => {
-                write!(fmt, "invalid number of arguments (expected {})", expected)
+                write!(f, "invalid number of arguments (expected {})", expected)
             },
             CommandError::InvalidUtf8String(error) => {
-                write!(fmt, "invalid utf8 string: {}", error)
+                write!(f, "invalid utf8 string: {}", error)
             },
         }
     }

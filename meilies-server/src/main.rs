@@ -1,11 +1,12 @@
 use std::ops::{Bound::Excluded, Bound::Unbounded};
 use std::time::Instant;
 use std::{env, fmt, str};
+use std::sync::Arc;
 
 use futures::future::poll_fn;
 use futures::future::Either;
 use log::{info, error};
-use sled::{Db, Event};
+use sled::{Db, Event, IVec};
 use tokio::codec::Decoder;
 use tokio::net::TcpListener;
 use tokio::prelude::*;
@@ -13,25 +14,30 @@ use tokio::sync::mpsc;
 
 mod event_id;
 
+#[derive(Debug)]
+struct EventNumber(i64);
+
 use meilies::codec::{RespCodec, RespValue};
 use meilies::command::{Command, CommandError};
 use event_id::EventId;
 
 enum CommandReturn {
     Publish,
-    Subscribe(mpsc::UnboundedReceiver<(EventId, Vec<u8>)>),
+    Subscribe(mpsc::UnboundedReceiver<(EventNumber, IVec)>),
 }
 
 enum Error {
     InvalidRequest(RequestError),
     InvalidCommand(CommandError),
+    CommandFailed(CommandError),
 }
 
 impl fmt::Display for Error {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         match self {
-            Error::InvalidRequest(e) => writeln!(f, "invalid request; {}", e),
-            Error::InvalidCommand(e) => writeln!(f, "invalid command; {}", e),
+            Error::InvalidRequest(e) => write!(f, "invalid request; {}", e),
+            Error::InvalidCommand(e) => write!(f, "invalid command; {}", e),
+            Error::CommandFailed(e) => write!(f, "command failed; {}", e),
         }
     }
 }
@@ -44,7 +50,7 @@ impl fmt::Display for RequestError {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         match self {
             RequestError::NotAnArrayOfBulkStrings => {
-                writeln!(f, "requests must be an array of bulk strings")
+                write!(f, "requests must be of the type bulk strings array")
             },
         }
     }
@@ -68,6 +74,88 @@ fn resp_into_arguments(value: RespValue) -> Result<Vec<Vec<u8>>, RequestError> {
     Ok(args)
 }
 
+// TODO introduce a Context type???
+fn execute_command(db: Db, command: Command) -> Result<CommandReturn, CommandError> {
+    match command {
+        Command::Publish { stream, event } => {
+            let tree = db.open_tree(stream.into_bytes()).unwrap();
+
+            let event_id = EventId::from(db.generate_id().unwrap());
+            tree.set(event_id, event).unwrap();
+
+            Ok(CommandReturn::Publish)
+        },
+        Command::Subscribe { stream, from } => {
+            let tree = db.open_tree(stream.into_bytes()).unwrap();
+            let (mut tx, rx) = mpsc::unbounded_channel();
+
+            tokio::spawn(poll_fn(move || {
+                tokio_threadpool::blocking(|| {
+                    info!("spawning a blocking subscription");
+
+                    let mut watcher = tree.watch_prefix(vec![]);
+                    let mut event_number = 0;
+
+                    if from >= 0 {
+                        let mut last_loop_event_id = None;
+                        let mut has_more_events = true;
+
+                        while has_more_events {
+                            // reset the watcher at each new loop
+                            watcher = tree.watch_prefix(vec![]);
+
+                            // if this is not the first iteration: skip the last unique id seen
+                            let range = match last_loop_event_id.take() {
+                                Some(id) => (Excluded(id), Unbounded),
+                                None     => (Unbounded,    Unbounded),
+                            };
+
+                            has_more_events = false;
+
+                            for result in tree.range(range) {
+                                has_more_events = true;
+
+                                let (k, v) = result.unwrap();
+                                last_loop_event_id = Some(k);
+
+                                if event_number >= from {
+                                    let event_number = EventNumber(event_number);
+                                    // the only possible error is a closed channel
+                                    if tx.start_send((event_number, v)).is_err() {
+                                        info!("encountered closed channel");
+                                        break
+                                    }
+                                }
+
+                                event_number += 1;
+                            }
+                        }
+                    }
+
+                    for event in watcher {
+                        if let Event::Set(_, value) = event {
+                            if event_number >= from {
+                                let event_number = EventNumber(event_number);
+                                let value = IVec::Remote { buf: Arc::from(value) };
+                                // the only possible error is a closed channel
+                                if tx.start_send((event_number, value)).is_err() {
+                                    info!("encountered closed channel");
+                                    break
+                                }
+                            }
+
+                            event_number += 1;
+                        }
+                    }
+                })
+                .map_err(|e| error!("{}", e))
+            }));
+
+            Ok(CommandReturn::Subscribe(rx))
+        }
+    }
+}
+
 fn main() {
     let _ = env_logger::init();
 
@@ -79,11 +167,10 @@ fn main() {
 
     let now = Instant::now();
     let db = Db::start_default("test-db").unwrap();
-    info!("sled loaded in {:.2?}", now.elapsed());
+    info!("kv-store loaded in {:.2?}", now.elapsed());
 
     let listener = TcpListener::bind(&addr).unwrap();
-
-    println!("server is running on {}", addr);
+    println!("server is listening on {}", addr);
 
     let server = listener
         .incoming()
@@ -94,9 +181,6 @@ fn main() {
 
             let db = db.clone();
             let responses = reader.map(move |value| {
-
-                println!("received: {:?}", value);
-
                 let args = match resp_into_arguments(value) {
                     Ok(args) => args,
                     Err(e) => return Err(Error::InvalidRequest(e)),
@@ -107,91 +191,10 @@ fn main() {
                     Err(e) => return Err(Error::InvalidCommand(e)),
                 };
 
-                println!("command: {:?}", command);
-
-                match command {
-                    Command::Publish { stream, event } => {
-                        let tree = db.open_tree(stream.into_bytes()).unwrap();
-
-                        let event_id = EventId::from(db.generate_id().unwrap());
-                        tree.set(event_id, event).unwrap();
-
-                        Ok(CommandReturn::Publish)
-                    },
-                    Command::Subscribe { stream, from } => {
-                        let db = db.clone();
-                        let (mut tx, rx) = mpsc::unbounded_channel();
-
-                        tokio::spawn(poll_fn(move || {
-                            let stream = stream.clone(); // o_O wtf !!!?
-
-                            tokio_threadpool::blocking(|| {
-                                info!("spawned blocking subscription");
-
-                                let tree = db.open_tree(stream.into_bytes()).unwrap();
-                                let mut watcher = tree.watch_prefix(vec![]);
-                                let mut event_number = 0;
-
-                                if from >= 0 {
-                                    let mut last_loop_event_id = None;
-                                    let mut has_more_events = true;
-
-                                    while has_more_events {
-                                        // reset the watcher at each new loop
-                                        watcher = tree.watch_prefix(vec![]);
-
-                                        // if this is not the first time: skip the last unique id seen
-                                        let range = match last_loop_event_id.take() {
-                                            Some(id) => (Excluded(id), Unbounded),
-                                            None     => (Unbounded,    Unbounded),
-                                        };
-
-                                        has_more_events = false;
-
-                                        for result in tree.range(range) {
-                                            has_more_events = true;
-
-                                            let (k, v) = result.unwrap();
-                                            let event_id = EventId::from_raw(&k).expect("Big Endian event id");
-                                            last_loop_event_id = Some(k);
-
-                                            if event_number >= from {
-                                                if tx.start_send((event_id, v.to_vec())).is_err() {
-                                                    // The only way a send can fail is because
-                                                    // of a closed channel
-                                                    info!("encountered closed channel");
-                                                    break
-                                                }
-                                            }
-
-                                            event_number += 1;
-                                        }
-                                    }
-                                }
-
-                                for event in watcher {
-                                    if let Event::Set(k, v) = event {
-                                        if event_number >= from {
-                                            let event_id = EventId::from_raw(&k).unwrap();
-                                            if tx.start_send((event_id, v.to_vec())).is_err() {
-                                                // The only way a send can fail is because
-                                                // of a closed channel
-                                                info!("encountered closed channel");
-                                                break
-                                            }
-                                        }
-
-                                        event_number += 1;
-                                    }
-                                }
-                            })
-                            .map_err(|e| error!("{}", e))
-                        }));
-
-                        Ok(CommandReturn::Subscribe(rx))
-                    }
+                match execute_command(db.clone(), command) {
+                    Ok(command_return) => Ok(command_return),
+                    Err(e) => Err(Error::CommandFailed(e)),
                 }
-
             })
             .map_err(|e| {
                 // FIXME return the error to the client
@@ -199,7 +202,7 @@ fn main() {
                 e
             });
 
-            let writes = responses.fold(writer, |writer, result: Result<_, Error>| {
+            let writes = responses.fold(writer, |writer, result| {
                 let command_return = match result {
                     Ok(command_return) => command_return,
                     Err(e) => return Either::A(writer.send(RespValue::error(e))),
@@ -209,9 +212,9 @@ fn main() {
                     CommandReturn::Publish => Either::A(writer.send(RespValue::string("OK"))),
                     CommandReturn::Subscribe(receiver) => {
                         let keys_values = receiver
-                            .map(|(event_id, v)| {
+                            .map(|(event_number, v)| {
                                 let value = str::from_utf8(&v).unwrap();
-                                RespValue::SimpleString(format!("{:?} -- {}", event_id, value))
+                                RespValue::SimpleString(format!("{:?} -- {}", event_number, value))
                             })
                             .map_err(|e| {
                                 eprintln!("error: {}", e);
