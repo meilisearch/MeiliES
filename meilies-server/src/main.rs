@@ -23,7 +23,10 @@ use event_id::EventId;
 
 enum CommandReturn {
     Publish,
-    Subscribe(mpsc::UnboundedReceiver<(EventNumber, IVec)>),
+    Subscribe {
+        stream: String,
+        events: mpsc::UnboundedReceiver<(EventNumber, IVec)>
+    },
 }
 
 enum Error<Actual=()> {
@@ -94,7 +97,7 @@ fn execute_command(db: Db, command: Command) -> Result<CommandReturn, Error> {
             Ok(CommandReturn::Publish)
         },
         Command::Subscribe { stream, from } => {
-            let tree = db.open_tree(stream.into_bytes())?;
+            let tree = db.open_tree(stream.clone().into_bytes())?;
             let (mut tx, rx) = mpsc::unbounded_channel();
 
             tokio::spawn(poll_fn(move || {
@@ -163,7 +166,7 @@ fn execute_command(db: Db, command: Command) -> Result<CommandReturn, Error> {
                 .map_err(|e| error!("{}", e))
             }));
 
-            Ok(CommandReturn::Subscribe(rx))
+            Ok(CommandReturn::Subscribe { stream, events: rx })
         }
     }
 }
@@ -219,8 +222,8 @@ fn main() {
 
                 match command_return {
                     CommandReturn::Publish => Either::A(writer.send(RespValue::string("OK"))),
-                    CommandReturn::Subscribe(receiver) => {
-                        let keys_values = receiver
+                    CommandReturn::Subscribe { stream, events } => {
+                        let keys_values = events
                             .map(|(event_number, v)| {
                                 let event_text = RespValue::bulk_string(Some(&"event"[..]));
                                 let event_number = RespValue::Integer(event_number.0);
@@ -232,7 +235,14 @@ fn main() {
                                 eprintln!("error: {}", e);
                                 std::io::ErrorKind::Interrupted
                             });
-                        Either::B(writer.send_all(keys_values).map(|(s, _)| s))
+
+                        let subscribed = RespValue::Array(Some(vec![
+                            RespValue::SimpleString("subscribed".to_string()),
+                            RespValue::SimpleString(stream),
+                            RespValue::Integer(1),
+                        ]));
+                        let responses = stream::once(Ok(subscribed)).chain(keys_values);
+                        Either::B(writer.send_all(responses).map(|(s, _)| s))
                     }
                 }
             });
