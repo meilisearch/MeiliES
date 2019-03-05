@@ -26,10 +26,11 @@ enum CommandReturn {
     Subscribe(mpsc::UnboundedReceiver<(EventNumber, IVec)>),
 }
 
-enum Error {
+enum Error<Actual=()> {
     InvalidRequest(RequestError),
     InvalidCommand(CommandError),
     CommandFailed(CommandError),
+    InternalError(sled::Error<Actual>),
 }
 
 impl fmt::Display for Error {
@@ -38,7 +39,14 @@ impl fmt::Display for Error {
             Error::InvalidRequest(e) => write!(f, "invalid request; {}", e),
             Error::InvalidCommand(e) => write!(f, "invalid command; {}", e),
             Error::CommandFailed(e) => write!(f, "command failed; {}", e),
+            Error::InternalError(e) => write!(f, "internal error; {}", e),
         }
+    }
+}
+
+impl<A> From<sled::Error<A>> for Error<A> {
+    fn from(error: sled::Error<A>) -> Error<A> {
+        Error::InternalError(error)
     }
 }
 
@@ -75,18 +83,18 @@ fn resp_into_arguments(value: RespValue) -> Result<Vec<Vec<u8>>, RequestError> {
 }
 
 // TODO introduce a Context type???
-fn execute_command(db: Db, command: Command) -> Result<CommandReturn, CommandError> {
+fn execute_command(db: Db, command: Command) -> Result<CommandReturn, Error> {
     match command {
         Command::Publish { stream, event } => {
-            let tree = db.open_tree(stream.into_bytes()).unwrap();
+            let tree = db.open_tree(stream.into_bytes())?;
 
-            let event_id = EventId::from(db.generate_id().unwrap());
+            let event_id = EventId::from(db.generate_id()?);
             tree.set(event_id, event).unwrap();
 
             Ok(CommandReturn::Publish)
         },
         Command::Subscribe { stream, from } => {
-            let tree = db.open_tree(stream.into_bytes()).unwrap();
+            let tree = db.open_tree(stream.into_bytes())?;
             let (mut tx, rx) = mpsc::unbounded_channel();
 
             tokio::spawn(poll_fn(move || {
@@ -115,7 +123,11 @@ fn execute_command(db: Db, command: Command) -> Result<CommandReturn, CommandErr
                             for result in tree.range(range) {
                                 has_more_events = true;
 
-                                let (k, v) = result.unwrap();
+                                let (k, v) = match result {
+                                    Ok(key_value) => key_value,
+                                    Err(e) => return error!("error while iterating on tree; {}", e),
+                                };
+
                                 last_loop_event_id = Some(k);
 
                                 if event_number >= from {
@@ -191,10 +203,7 @@ fn main() {
                     Err(e) => return Err(Error::InvalidCommand(e)),
                 };
 
-                match execute_command(db.clone(), command) {
-                    Ok(command_return) => Ok(command_return),
-                    Err(e) => Err(Error::CommandFailed(e)),
-                }
+                execute_command(db.clone(), command)
             })
             .map_err(|e| {
                 // FIXME return the error to the client
