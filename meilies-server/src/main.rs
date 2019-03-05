@@ -1,6 +1,6 @@
 use std::ops::{Bound::Excluded, Bound::Unbounded};
 use std::time::Instant;
-use std::{env, fmt, str};
+use std::{env, fmt};
 use std::sync::Arc;
 
 use futures::future::poll_fn;
@@ -222,8 +222,11 @@ fn main() {
                     CommandReturn::Subscribe(receiver) => {
                         let keys_values = receiver
                             .map(|(event_number, v)| {
-                                let value = str::from_utf8(&v).unwrap();
-                                RespValue::SimpleString(format!("{:?} -- {}", event_number, value))
+                                let event_text = RespValue::bulk_string(Some(&"event"[..]));
+                                let event_number = RespValue::Integer(event_number.0);
+                                let value = RespValue::bulk_string(Some(v.to_vec()));
+
+                                RespValue::Array(Some(vec![event_text, event_number, value]))
                             })
                             .map_err(|e| {
                                 eprintln!("error: {}", e);
