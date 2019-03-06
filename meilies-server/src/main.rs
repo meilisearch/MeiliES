@@ -223,13 +223,15 @@ fn main() {
                 match command_return {
                     CommandReturn::Publish => Either::A(writer.send(RespValue::string("OK"))),
                     CommandReturn::Subscribe { stream, events } => {
-                        let events = events
-                            .map(|(event_number, v)| {
+                        let events = stream::repeat(stream.clone())
+                            .zip(events)
+                            .map(|(stream, (event_number, v))| {
                                 let event_text = RespValue::bulk_string(&"event"[..]);
+                                let stream = RespValue::bulk_string(stream);
                                 let event_number = RespValue::Integer(event_number.0);
                                 let value = RespValue::bulk_string(v.to_vec());
 
-                                RespValue::Array(vec![event_text, event_number, value])
+                                RespValue::Array(vec![event_text, stream, event_number, value])
                             })
                             .map_err(|e| {
                                 eprintln!("error: {}", e);
