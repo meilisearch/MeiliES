@@ -223,7 +223,7 @@ fn main() {
                 match command_return {
                     CommandReturn::Publish => Either::A(writer.send(RespValue::string("OK"))),
                     CommandReturn::Subscribe { stream, events } => {
-                        let keys_values = events
+                        let events = events
                             .map(|(event_number, v)| {
                                 let event_text = RespValue::bulk_string(Some(&"event"[..]));
                                 let event_number = RespValue::Integer(event_number.0);
@@ -239,10 +239,13 @@ fn main() {
                         let subscribed = RespValue::Array(Some(vec![
                             RespValue::SimpleString("subscribed".to_string()),
                             RespValue::SimpleString(stream),
-                            RespValue::Integer(1),
                         ]));
-                        let responses = stream::once(Ok(subscribed)).chain(keys_values);
-                        Either::B(writer.send_all(responses).map(|(s, _)| s))
+
+                        let responses = writer
+                            .send(subscribed)
+                            .and_then(|writer| writer.send_all(events).map(|(s, _)| s));
+
+                        Either::B(responses)
                     }
                 }
             });
