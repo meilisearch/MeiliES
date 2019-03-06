@@ -17,8 +17,9 @@ pub enum RespValue {
     SimpleString(String),
     Error(String),
     Integer(i64),
-    BulkString(Option<Vec<u8>>),
-    Array(Option<Vec<RespValue>>),
+    BulkString(Vec<u8>),
+    Array(Vec<RespValue>),
+    Nil,
 }
 
 impl RespValue {
@@ -30,8 +31,8 @@ impl RespValue {
         RespValue::Error(string.to_string())
     }
 
-    pub fn bulk_string(string: Option<impl Into<Vec<u8>>>) -> RespValue {
-        RespValue::BulkString(string.map(Into::into))
+    pub fn bulk_string(string: impl Into<Vec<u8>>) -> RespValue {
+        RespValue::BulkString(string.into())
     }
 }
 
@@ -50,16 +51,18 @@ impl fmt::Debug for RespValue {
             RespValue::BulkString(value) => {
                 let mut dbg = fmt.debug_tuple("BulkString");
 
-                match value.as_ref().map(|v| (v, str::from_utf8(v))) {
-                    Some((_, Ok(value))) => dbg.field(&value),
-                    Some((value, Err(_))) => dbg.field(&value),
-                    none => dbg.field(&none),
+                match (value, str::from_utf8(value)) {
+                    (_, Ok(value)) => dbg.field(&value),
+                    (value, Err(_)) => dbg.field(&value),
                 };
 
                 dbg.finish()
             },
             RespValue::Array(elements) => {
                 fmt.debug_tuple("Array").field(&elements).finish()
+            },
+            RespValue::Nil => {
+                fmt.debug_tuple("Nil").finish()
             },
         }
     }
@@ -172,7 +175,7 @@ fn decode_bulk_string(buf: &[u8]) -> Result<Option<(RespValue, usize)>, RespMsgE
             let buf = &buf[advance..];
 
             match length {
-                len if len < 0 => Ok(Some((RespValue::BulkString(None), advance))),
+                len if len < 0 => Ok(Some((RespValue::Nil, advance))),
                 _ => {
                     // FIXME handle overflows !!!
                     if buf.len() as i64 >= length + CRLF_NEWLINE.len() as i64 {
@@ -182,7 +185,7 @@ fn decode_bulk_string(buf: &[u8]) -> Result<Option<(RespValue, usize)>, RespMsgE
                         };
 
                         let advance = advance + bytes.len() + CRLF_NEWLINE.len();
-                        Ok(Some((RespValue::BulkString(Some(bytes)), advance)))
+                        Ok(Some((RespValue::BulkString(bytes), advance)))
 
                     }
                     else {
@@ -204,7 +207,7 @@ fn decode_array(buf: &[u8]) -> Result<Option<(RespValue, usize)>, RespMsgError> 
             let mut advance = bytes_string.len() + CRLF_NEWLINE.len();
 
             match length {
-                len if len < 0 => Ok(Some((RespValue::Array(None), advance))),
+                len if len < 0 => Ok(Some((RespValue::Nil, advance))),
                 _ => {
                     let mut array = Vec::with_capacity(length as usize);
                     for _ in 0..length {
@@ -218,7 +221,7 @@ fn decode_array(buf: &[u8]) -> Result<Option<(RespValue, usize)>, RespMsgError> 
                         }
                     }
 
-                    Ok(Some((RespValue::Array(Some(array)), advance)))
+                    Ok(Some((RespValue::Array(array), advance)))
                 },
             }
         },
@@ -307,61 +310,44 @@ impl Encoder for RespCodec {
                 Ok(())
             },
             RespValue::BulkString(bytes_string) => {
-                match bytes_string {
-                    Some(bytes_string) => {
-                        let length = bytes_string.len();
-                        let integer_string = length.to_string();
-                        buf.reserve(1 + integer_string.len() + length + CRLF_NEWLINE.len() * 2);
+                let length = bytes_string.len();
+                let integer_string = length.to_string();
+                buf.reserve(1 + integer_string.len() + length + CRLF_NEWLINE.len() * 2);
 
-                        buf.put_u8(BULK_STRING_CHAR);
-                        buf.put(integer_string);
-                        buf.put(&CRLF_NEWLINE[..]);
-                        buf.put(bytes_string);
-                        buf.put(&CRLF_NEWLINE[..]);
+                buf.put_u8(BULK_STRING_CHAR);
+                buf.put(integer_string);
+                buf.put(&CRLF_NEWLINE[..]);
+                buf.put(bytes_string);
+                buf.put(&CRLF_NEWLINE[..]);
 
-                        Ok(())
-                    },
-                    None => {
-                        let integer_string = "-1";
-                        buf.reserve(1 + integer_string.len() + CRLF_NEWLINE.len());
-
-                        buf.put_u8(BULK_STRING_CHAR);
-                        buf.put(integer_string);
-                        buf.put(&CRLF_NEWLINE[..]);
-
-                        Ok(())
-                    }
-                }
+                Ok(())
             },
             RespValue::Array(array) => {
-                match array {
-                    Some(array) => {
-                        let length = array.len();
-                        let integer_string = length.to_string();
-                        buf.reserve(1 + integer_string.len() + CRLF_NEWLINE.len());
+                let length = array.len();
+                let integer_string = length.to_string();
+                buf.reserve(1 + integer_string.len() + CRLF_NEWLINE.len());
 
-                        buf.put_u8(ARRAY_CHAR);
-                        buf.put(integer_string);
-                        buf.put(&CRLF_NEWLINE[..]);
+                buf.put_u8(ARRAY_CHAR);
+                buf.put(integer_string);
+                buf.put(&CRLF_NEWLINE[..]);
 
-                        for msg in array {
-                            self.encode(msg, buf)?;
-                        }
-
-                        Ok(())
-                    },
-                    None => {
-                        let integer_string = "-1";
-                        buf.reserve(1 + integer_string.len() + CRLF_NEWLINE.len());
-
-                        buf.put_u8(ARRAY_CHAR);
-                        buf.put(integer_string);
-                        buf.put(&CRLF_NEWLINE[..]);
-
-                        Ok(())
-                    }
+                for msg in array {
+                    self.encode(msg, buf)?;
                 }
+
+                Ok(())
             },
+            RespValue::Nil => {
+                // We chose to use the Bulk String to represent nil values.
+                let integer_string = "-1";
+                buf.reserve(1 + integer_string.len() + CRLF_NEWLINE.len());
+
+                buf.put_u8(BULK_STRING_CHAR);
+                buf.put(integer_string);
+                buf.put(&CRLF_NEWLINE[..]);
+
+                Ok(())
+            }
         }
     }
 }
@@ -419,7 +405,7 @@ mod tests {
     fn one_bulk_string() {
         let mut buf = BytesMut::new();
 
-        let inmsg = RespValue::BulkString(None);
+        let inmsg = RespValue::BulkString(vec![]);
         RespCodec.encode(inmsg.clone(), &mut buf).unwrap();
         let outmsg = RespCodec.decode(&mut buf).unwrap();
 
@@ -428,7 +414,7 @@ mod tests {
 
         let mut buf = BytesMut::new();
 
-        let inmsg = RespValue::BulkString(Some(vec![1, 2, 3, 4, 5, 35, 70]));
+        let inmsg = RespValue::BulkString(vec![1, 2, 3, 4, 5, 35, 70]);
         RespCodec.encode(inmsg.clone(), &mut buf).unwrap();
         let outmsg = RespCodec.decode(&mut buf).unwrap();
 
@@ -440,36 +426,39 @@ mod tests {
     fn one_array() {
         let mut buf = BytesMut::new();
 
-        let inmsg = RespValue::Array(None);
+        let inmsg = RespValue::Array(vec![]);
         RespCodec.encode(inmsg.clone(), &mut buf).unwrap();
         let outmsg = RespCodec.decode(&mut buf).unwrap();
 
         assert_eq!(Some(inmsg), outmsg);
         assert!(buf.is_empty());
 
-        let mut buf = BytesMut::new();
-
-        let inmsg = RespValue::Array(Some(vec![]));
+        let inmsg = RespValue::Array(vec![RespValue::BulkString(b"hello".to_vec())]);
         RespCodec.encode(inmsg.clone(), &mut buf).unwrap();
         let outmsg = RespCodec.decode(&mut buf).unwrap();
 
         assert_eq!(Some(inmsg), outmsg);
         assert!(buf.is_empty());
 
-        let inmsg = RespValue::Array(Some(vec![RespValue::BulkString(Some(b"hello".to_vec()))]));
-        RespCodec.encode(inmsg.clone(), &mut buf).unwrap();
-        let outmsg = RespCodec.decode(&mut buf).unwrap();
-
-        assert_eq!(Some(inmsg), outmsg);
-        assert!(buf.is_empty());
-
-        let inmsg = RespValue::Array(Some(vec![
+        let inmsg = RespValue::Array(vec![
             RespValue::SimpleString("hello".to_owned()),
             RespValue::Error("what the f*ck!".to_owned()),
             RespValue::Integer(25),
-            RespValue::BulkString(Some(b"hello".to_vec())),
-            RespValue::Array(Some(vec![RespValue::Integer(45)])),
-        ]));
+            RespValue::BulkString(b"hello".to_vec()),
+            RespValue::Array(vec![RespValue::Integer(45)]),
+        ]);
+        RespCodec.encode(inmsg.clone(), &mut buf).unwrap();
+        let outmsg = RespCodec.decode(&mut buf).unwrap();
+
+        assert_eq!(Some(inmsg), outmsg);
+        assert!(buf.is_empty());
+    }
+
+    #[test]
+    fn one_nil() {
+        let mut buf = BytesMut::new();
+
+        let inmsg = RespValue::Nil;
         RespCodec.encode(inmsg.clone(), &mut buf).unwrap();
         let outmsg = RespCodec.decode(&mut buf).unwrap();
 
@@ -547,9 +536,9 @@ mod tests {
     fn multiple_bulk_string() {
         let mut buf = BytesMut::new();
 
-        let inmsg1 = RespValue::BulkString(None);
-        let inmsg2 = RespValue::BulkString(Some(vec![1, 2, 3, 4, 5, 35, 70]));
-        let inmsg3 = RespValue::BulkString(Some(vec![]));
+        let inmsg1 = RespValue::BulkString(vec![8, 7, 6, 5, 4]);
+        let inmsg2 = RespValue::BulkString(vec![1, 2, 3, 4, 5, 35, 70]);
+        let inmsg3 = RespValue::BulkString(vec![]);
 
         RespCodec.encode(inmsg1.clone(), &mut buf).unwrap();
         RespCodec.encode(inmsg2.clone(), &mut buf).unwrap();
@@ -572,15 +561,15 @@ mod tests {
         let inmsg1 = RespValue::SimpleString("kiki".to_owned());
         let inmsg2 = RespValue::Error("whoops, it is and error".to_owned());
         let inmsg3 = RespValue::Integer(12);
-        let inmsg4 = RespValue::BulkString(None);
-        let inmsg5 = RespValue::BulkString(Some(vec![1, 2, 3, 4, 5, 35, 70]));
-        let inmsg6 = RespValue::Array(Some(vec![
+        let inmsg4 = RespValue::BulkString(vec![8, 7, 6, 5, 4]);
+        let inmsg5 = RespValue::BulkString(vec![1, 2, 3, 4, 5, 35, 70]);
+        let inmsg6 = RespValue::Array(vec![
             RespValue::SimpleString("hello".to_owned()),
             RespValue::Error("what the f*ck!".to_owned()),
             RespValue::Integer(25),
-            RespValue::BulkString(Some(b"hello".to_vec())),
-            RespValue::Array(Some(vec![RespValue::Integer(45)])),
-        ]));
+            RespValue::BulkString(b"hello".to_vec()),
+            RespValue::Array(vec![RespValue::Integer(45)]),
+        ]);
 
         RespCodec.encode(inmsg1.clone(), &mut buf).unwrap();
         RespCodec.encode(inmsg2.clone(), &mut buf).unwrap();
@@ -629,7 +618,7 @@ mod tests {
     fn partial_bulk_string() {
         let mut buf = BytesMut::new();
 
-        let inmsg = RespValue::BulkString(Some(vec![1, 2, 3, 4, 5, 35, 70]));
+        let inmsg = RespValue::BulkString(vec![1, 2, 3, 4, 5, 35, 70]);
 
         RespCodec.encode(inmsg.clone(), &mut buf).unwrap();
 
@@ -649,13 +638,13 @@ mod tests {
     fn partial_array() {
         let mut buf = BytesMut::new();
 
-        let inmsg = RespValue::Array(Some(vec![
+        let inmsg = RespValue::Array(vec![
             RespValue::SimpleString("hello".to_owned()),
             RespValue::Error("what the f*ck!".to_owned()),
             RespValue::Integer(25),
-            RespValue::BulkString(Some(b"hello".to_vec())),
-            RespValue::Array(Some(vec![RespValue::Integer(45)])),
-        ]));
+            RespValue::BulkString(b"hello".to_vec()),
+            RespValue::Array(vec![RespValue::Integer(45)]),
+        ]);
 
         RespCodec.encode(inmsg.clone(), &mut buf).unwrap();
 

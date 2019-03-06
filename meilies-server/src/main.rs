@@ -69,7 +69,7 @@ impl fmt::Display for RequestError {
 
 fn resp_into_arguments(value: RespValue) -> Result<Vec<Vec<u8>>, RequestError> {
     let array = match value {
-        RespValue::Array(Some(array)) => array,
+        RespValue::Array(array) => array,
         _ => return Err(RequestError::NotAnArrayOfBulkStrings),
     };
 
@@ -77,7 +77,7 @@ fn resp_into_arguments(value: RespValue) -> Result<Vec<Vec<u8>>, RequestError> {
 
     for value in array {
         match value {
-            RespValue::BulkString(Some(buffer)) => args.push(buffer),
+            RespValue::BulkString(buffer) => args.push(buffer),
             _ => return Err(RequestError::NotAnArrayOfBulkStrings),
         }
     }
@@ -225,21 +225,21 @@ fn main() {
                     CommandReturn::Subscribe { stream, events } => {
                         let events = events
                             .map(|(event_number, v)| {
-                                let event_text = RespValue::bulk_string(Some(&"event"[..]));
+                                let event_text = RespValue::bulk_string(&"event"[..]);
                                 let event_number = RespValue::Integer(event_number.0);
-                                let value = RespValue::bulk_string(Some(v.to_vec()));
+                                let value = RespValue::bulk_string(v.to_vec());
 
-                                RespValue::Array(Some(vec![event_text, event_number, value]))
+                                RespValue::Array(vec![event_text, event_number, value])
                             })
                             .map_err(|e| {
                                 eprintln!("error: {}", e);
                                 std::io::ErrorKind::Interrupted
                             });
 
-                        let subscribed = RespValue::Array(Some(vec![
+                        let subscribed = RespValue::Array(vec![
                             RespValue::SimpleString("subscribed".to_string()),
                             RespValue::SimpleString(stream),
-                        ]));
+                        ]);
 
                         let responses = writer
                             .send(subscribed)
