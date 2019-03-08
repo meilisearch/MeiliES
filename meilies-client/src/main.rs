@@ -47,8 +47,8 @@ fn main() {
                 _ => false,
             };
 
-            let args = opt.cmd_args.into_iter().map(|s| RespValue::bulk_string(Some(s))).collect();
-            let command = RespValue::Array(Some(args));
+            let args = opt.cmd_args.into_iter().map(RespValue::bulk_string).collect();
+            let command = RespValue::Array(args);
 
             let writes = writer.send(command);
 

@@ -24,8 +24,8 @@ use event_id::EventId;
 enum CommandReturn {
     Publish,
     Subscribe {
-        stream: String,
-        events: mpsc::UnboundedReceiver<(EventNumber, IVec)>
+        streams: Vec<String>,
+        events: mpsc::UnboundedReceiver<(String, EventNumber, IVec)>,
     },
 }
 
@@ -92,51 +92,73 @@ fn execute_command(db: Db, command: Command) -> Result<CommandReturn, Error> {
             let tree = db.open_tree(stream.into_bytes())?;
 
             let event_id = EventId::from(db.generate_id()?);
-            tree.set(event_id, event).unwrap();
+            tree.set(event_id, event)?;
 
             Ok(CommandReturn::Publish)
         },
-        Command::Subscribe { stream, from } => {
-            let tree = db.open_tree(stream.clone().into_bytes())?;
-            let (mut tx, rx) = mpsc::unbounded_channel();
+        Command::Subscribe { streams } => {
+            let (tx, rx) = mpsc::unbounded_channel();
+            let mut streams_names = Vec::with_capacity(streams.len());
 
-            tokio::spawn(poll_fn(move || {
-                tokio_threadpool::blocking(|| {
-                    info!("spawning a blocking subscription");
+            for (stream, from) in streams {
+                streams_names.push(stream.clone());
+                let tree = db.open_tree(stream.clone().into_bytes())?;
+                let mut tx = tx.clone();
 
-                    let mut watcher = tree.watch_prefix(vec![]);
-                    let mut event_number = 0;
+                tokio::spawn(poll_fn(move || {
+                    tokio_threadpool::blocking(|| {
+                        info!("spawning a blocking subscription");
 
-                    if from >= 0 {
-                        let mut last_loop_event_id = None;
-                        let mut has_more_events = true;
+                        let mut watcher = tree.watch_prefix(vec![]);
+                        let mut event_number = 0;
 
-                        while has_more_events {
-                            // reset the watcher at each new loop
-                            watcher = tree.watch_prefix(vec![]);
+                        if from >= 0 {
+                            let mut last_loop_event_id = None;
+                            let mut has_more_events = true;
 
-                            // if this is not the first iteration: skip the last unique id seen
-                            let range = match last_loop_event_id.take() {
-                                Some(id) => (Excluded(id), Unbounded),
-                                None     => (Unbounded,    Unbounded),
-                            };
+                            while has_more_events {
+                                // reset the watcher at each new loop
+                                watcher = tree.watch_prefix(vec![]);
 
-                            has_more_events = false;
-
-                            for result in tree.range(range) {
-                                has_more_events = true;
-
-                                let (k, v) = match result {
-                                    Ok(key_value) => key_value,
-                                    Err(e) => return error!("error while iterating on tree; {}", e),
+                                // if this is not the first iteration: skip the last unique id seen
+                                let range = match last_loop_event_id.take() {
+                                    Some(id) => (Excluded(id), Unbounded),
+                                    None     => (Unbounded,    Unbounded),
                                 };
 
-                                last_loop_event_id = Some(k);
+                                has_more_events = false;
 
+                                for result in tree.range(range) {
+                                    has_more_events = true;
+
+                                    let (k, v) = match result {
+                                        Ok(key_value) => key_value,
+                                        Err(e) => return error!("error while iterating on tree; {}", e),
+                                    };
+
+                                    last_loop_event_id = Some(k);
+
+                                    if event_number >= from {
+                                        let event_number = EventNumber(event_number);
+                                        // the only possible error is a closed channel
+                                        if tx.start_send((stream.clone(), event_number, v)).is_err() {
+                                            info!("encountered closed channel");
+                                            break
+                                        }
+                                    }
+
+                                    event_number += 1;
+                                }
+                            }
+                        }
+
+                        for event in watcher {
+                            if let Event::Set(_, value) = event {
                                 if event_number >= from {
                                     let event_number = EventNumber(event_number);
+                                    let value = IVec::Remote { buf: Arc::from(value) };
                                     // the only possible error is a closed channel
-                                    if tx.start_send((event_number, v)).is_err() {
+                                    if tx.start_send((stream.clone(), event_number, value)).is_err() {
                                         info!("encountered closed channel");
                                         break
                                     }
@@ -145,28 +167,12 @@ fn execute_command(db: Db, command: Command) -> Result<CommandReturn, Error> {
                                 event_number += 1;
                             }
                         }
-                    }
+                    })
+                    .map_err(|e| error!("{}", e))
+                }));
+            }
 
-                    for event in watcher {
-                        if let Event::Set(_, value) = event {
-                            if event_number >= from {
-                                let event_number = EventNumber(event_number);
-                                let value = IVec::Remote { buf: Arc::from(value) };
-                                // the only possible error is a closed channel
-                                if tx.start_send((event_number, value)).is_err() {
-                                    info!("encountered closed channel");
-                                    break
-                                }
-                            }
-
-                            event_number += 1;
-                        }
-                    }
-                })
-                .map_err(|e| error!("{}", e))
-            }));
-
-            Ok(CommandReturn::Subscribe { stream, events: rx })
+            Ok(CommandReturn::Subscribe { streams: streams_names, events: rx })
         }
     }
 }
@@ -222,11 +228,10 @@ fn main() {
 
                 match command_return {
                     CommandReturn::Publish => Either::A(writer.send(RespValue::string("OK"))),
-                    CommandReturn::Subscribe { stream, events } => {
-                        let events = stream::repeat(stream.clone())
-                            .zip(events)
-                            .map(|(stream, (event_number, v))| {
-                                let event_text = RespValue::bulk_string(&"event"[..]);
+                    CommandReturn::Subscribe { streams, events } => {
+                        let events = events
+                            .map(|(stream, event_number, v)| {
+                                let event_text = RespValue::SimpleString("event".to_owned());
                                 let stream = RespValue::bulk_string(stream);
                                 let event_number = RespValue::Integer(event_number.0);
                                 let value = RespValue::bulk_string(v.to_vec());
@@ -240,7 +245,7 @@ fn main() {
 
                         let subscribed = RespValue::Array(vec![
                             RespValue::SimpleString("subscribed".to_string()),
-                            RespValue::SimpleString(stream),
+                            RespValue::Array(streams.into_iter().map(RespValue::bulk_string).collect()),
                         ]);
 
                         let responses = writer
