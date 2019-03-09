@@ -189,14 +189,20 @@ fn main() {
     let addr = env::args().nth(1).unwrap_or("127.0.0.1:6480".into());
     let addr = match addr.parse() {
         Ok(addr) => addr,
-        Err(e) => return error!("error parsing addr; {}", e),
+        Err(e) => return error!("error parsing addr {:?}; {}", addr, e),
     };
 
     let now = Instant::now();
-    let db = Db::start_default("test-db").unwrap();
+    let db = match Db::start_default("test-db") {
+        Ok(db) => db,
+        Err(e) => return error!("error opening database; {}", e),
+    };
     info!("kv-store loaded in {:.2?}", now.elapsed());
 
-    let listener = TcpListener::bind(&addr).unwrap();
+    let listener = match TcpListener::bind(&addr) {
+        Ok(listener) => listener,
+        Err(e) => return error!("error binding address; {}", e),
+    };
     println!("server is listening on {}", addr);
 
     let server = listener
@@ -222,7 +228,7 @@ fn main() {
             })
             .map_err(|e| {
                 // FIXME return the error to the client
-                println!("{:?}", e);
+                error!("{}", e);
                 e
             });
 
@@ -245,8 +251,8 @@ fn main() {
                                 RespValue::Array(vec![event_text, stream, event_number, value])
                             })
                             .map_err(|e| {
-                                eprintln!("error: {}", e);
-                                std::io::ErrorKind::Interrupted
+                                error!("{}", e);
+                                std::io::Error::new(std::io::ErrorKind::Other, e)
                             });
 
                         let subscribed = RespValue::Array(vec![
