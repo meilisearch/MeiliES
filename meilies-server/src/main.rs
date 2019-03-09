@@ -12,20 +12,18 @@ use tokio::net::TcpListener;
 use tokio::prelude::*;
 use tokio::sync::mpsc;
 
-mod event_id;
-
-#[derive(Debug)]
-struct EventNumber(i64);
-
 use meilies::codec::{RespCodec, RespValue};
 use meilies::command::{Command, CommandError};
+use meilies::stream::{self as es_stream, EventNumber, StartReadFrom};
 use event_id::EventId;
+
+mod event_id;
 
 enum CommandReturn {
     Publish,
     Subscribe {
-        streams: Vec<String>,
-        events: mpsc::UnboundedReceiver<(String, EventNumber, IVec)>,
+        streams: Vec<es_stream::Stream>,
+        events: mpsc::UnboundedReceiver<(es_stream::Stream, EventNumber, IVec)>,
     },
 }
 
@@ -100,9 +98,9 @@ fn execute_command(db: Db, command: Command) -> Result<CommandReturn, Error> {
             let (tx, rx) = mpsc::unbounded_channel();
             let mut streams_names = Vec::with_capacity(streams.len());
 
-            for (stream, from) in streams {
-                streams_names.push(stream.clone());
-                let tree = db.open_tree(stream.clone().into_bytes())?;
+            for stream in streams.clone() {
+                streams_names.push(stream.name.clone());
+                let tree = db.open_tree(stream.name.clone().into_bytes())?;
                 let mut tx = tx.clone();
 
                 tokio::spawn(poll_fn(move || {
@@ -112,7 +110,8 @@ fn execute_command(db: Db, command: Command) -> Result<CommandReturn, Error> {
                         let mut watcher = tree.watch_prefix(vec![]);
                         let mut event_number = 0;
 
-                        if from >= 0 {
+                        if let StartReadFrom::EventNumber(from_event_number) = stream.from {
+
                             let mut last_loop_event_id = None;
                             let mut has_more_events = true;
 
@@ -138,7 +137,7 @@ fn execute_command(db: Db, command: Command) -> Result<CommandReturn, Error> {
 
                                     last_loop_event_id = Some(k);
 
-                                    if event_number >= from {
+                                    if event_number >= from_event_number {
                                         let event_number = EventNumber(event_number);
                                         // the only possible error is a closed channel
                                         if tx.start_send((stream.clone(), event_number, v)).is_err() {
@@ -154,7 +153,13 @@ fn execute_command(db: Db, command: Command) -> Result<CommandReturn, Error> {
 
                         for event in watcher {
                             if let Event::Set(_, value) = event {
-                                if event_number >= from {
+
+                                let is_accepted = match stream.from {
+                                    StartReadFrom::EventNumber(number) => event_number >= number,
+                                    StartReadFrom::End => true,
+                                };
+
+                                if is_accepted {
                                     let event_number = EventNumber(event_number);
                                     let value = IVec::Remote { buf: Arc::from(value) };
                                     // the only possible error is a closed channel
@@ -172,7 +177,7 @@ fn execute_command(db: Db, command: Command) -> Result<CommandReturn, Error> {
                 }));
             }
 
-            Ok(CommandReturn::Subscribe { streams: streams_names, events: rx })
+            Ok(CommandReturn::Subscribe { streams, events: rx })
         }
     }
 }
@@ -232,8 +237,8 @@ fn main() {
                         let events = events
                             .map(|(stream, event_number, v)| {
                                 let event_text = RespValue::SimpleString("event".to_owned());
-                                let stream = RespValue::bulk_string(stream);
-                                let event_number = RespValue::Integer(event_number.0);
+                                let stream = RespValue::bulk_string(stream.to_string());
+                                let event_number = RespValue::Integer(event_number.0 as i64);
                                 let value = RespValue::bulk_string(v.to_vec());
 
                                 RespValue::Array(vec![event_text, stream, event_number, value])
@@ -245,7 +250,7 @@ fn main() {
 
                         let subscribed = RespValue::Array(vec![
                             RespValue::SimpleString("subscribed".to_string()),
-                            RespValue::Array(streams.into_iter().map(RespValue::bulk_string).collect()),
+                            RespValue::Array(streams.into_iter().map(|s| RespValue::bulk_string(s.to_string())).collect()),
                         ]);
 
                         let responses = writer

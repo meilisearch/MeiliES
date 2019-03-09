@@ -1,8 +1,10 @@
+use crate::stream::{Stream, StreamName, StreamNameError, ParseStreamError};
+use std::str::FromStr;
 use std::{fmt, str, string};
 
 pub enum Command {
-    Publish { stream: String, event: Vec<u8> },
-    Subscribe { streams: Vec<(String, i64)> },
+    Publish { stream: StreamName, event: Vec<u8> },
+    Subscribe { streams: Vec<Stream> },
 }
 
 impl fmt::Debug for Command {
@@ -28,7 +30,7 @@ impl fmt::Debug for Command {
 
 #[derive(Debug)]
 pub enum CommandError {
-    InvalidStreamName,
+    InvalidStream(ParseStreamError),
     CommandNotFound,
     MissingCommandName,
     InvalidNumberOfArguments { expected: usize },
@@ -38,9 +40,7 @@ pub enum CommandError {
 impl fmt::Display for CommandError {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         match self {
-            CommandError::InvalidStreamName => {
-                write!(f, "invalid stream name")
-            },
+            CommandError::InvalidStream(e) => write!(f, "invalid stream; {}", e),
             CommandError::CommandNotFound => {
                 write!(f, "command not found")
             },
@@ -69,6 +69,18 @@ impl From<string::FromUtf8Error> for CommandError {
     }
 }
 
+impl From<ParseStreamError> for CommandError {
+    fn from(error: ParseStreamError) -> CommandError {
+        CommandError::InvalidStream(error)
+    }
+}
+
+impl From<StreamNameError> for CommandError {
+    fn from(error: StreamNameError) -> CommandError {
+        CommandError::InvalidStream(ParseStreamError::StreamNameError(error))
+    }
+}
+
 impl Command {
     pub fn from_args(mut args: Vec<Vec<u8>>) -> Result<Command, CommandError> {
         let mut args = args.drain(..);
@@ -82,11 +94,8 @@ impl Command {
             "publish" => {
                 match (args.next(), args.next(), args.next()) {
                     (Some(stream), Some(event), None) => {
-                        if stream.contains(&b':') {
-                            return Err(CommandError::InvalidStreamName)
-                        }
-
-                        let stream = String::from_utf8(stream)?;
+                        let text = str::from_utf8(&stream)?;
+                        let stream = StreamName::from_str(text)?;
                         Ok(Command::Publish { stream, event })
                     },
                     _ => Err(CommandError::InvalidNumberOfArguments { expected: 2 })
@@ -94,24 +103,10 @@ impl Command {
             },
             "subscribe" => {
                 let mut streams = Vec::new();
-                for mut stream in args {
-                    match stream.iter().position(|c| *c == b':') {
-                        Some(colon_offset) => {
-                            let from = stream.split_off(colon_offset + 1);
-                            stream.pop(); // remove the colon itself
-
-                            let stream = String::from_utf8(stream)?;
-
-                            let from = str::from_utf8(&from)?;
-                            let from = i64::from_str_radix(from, 10).unwrap();
-
-                            streams.push((stream, from));
-                        },
-                        None => {
-                            let stream = String::from_utf8(stream)?;
-                            streams.push((stream, -1));
-                        }
-                    }
+                for bytes in args {
+                    let text = str::from_utf8(&bytes)?;
+                    let stream = Stream::from_str(&text)?;
+                    streams.push(stream);
                 }
                 Ok(Command::Subscribe { streams })
             },
