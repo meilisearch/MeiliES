@@ -109,45 +109,46 @@ fn execute_command(db: Db, command: Command) -> Result<CommandReturn, Error> {
 
                         let mut watcher = tree.watch_prefix(vec![]);
                         let mut event_number = 0;
+                        let mut last_loop_event_id = None;
+                        let mut has_more_events = true;
 
-                        if let StartReadFrom::EventNumber(from_event_number) = stream.from {
+                        while has_more_events {
+                            // reset the watcher at each new loop
+                            watcher = tree.watch_prefix(vec![]);
 
-                            let mut last_loop_event_id = None;
-                            let mut has_more_events = true;
+                            // if this is not the first iteration: skip the last unique id seen
+                            let range = match last_loop_event_id.take() {
+                                Some(id) => (Excluded(id), Unbounded),
+                                None     => (Unbounded,    Unbounded),
+                            };
 
-                            while has_more_events {
-                                // reset the watcher at each new loop
-                                watcher = tree.watch_prefix(vec![]);
+                            has_more_events = false;
 
-                                // if this is not the first iteration: skip the last unique id seen
-                                let range = match last_loop_event_id.take() {
-                                    Some(id) => (Excluded(id), Unbounded),
-                                    None     => (Unbounded,    Unbounded),
+                            for result in tree.range(range) {
+                                has_more_events = true;
+
+                                let (k, v) = match result {
+                                    Ok(key_value) => key_value,
+                                    Err(e) => return error!("error while iterating on tree; {}", e),
                                 };
 
-                                has_more_events = false;
+                                last_loop_event_id = Some(k);
 
-                                for result in tree.range(range) {
-                                    has_more_events = true;
+                                let is_accepted = match stream.from {
+                                    StartReadFrom::EventNumber(number) => event_number >= number,
+                                    StartReadFrom::End => true,
+                                };
 
-                                    let (k, v) = match result {
-                                        Ok(key_value) => key_value,
-                                        Err(e) => return error!("error while iterating on tree; {}", e),
-                                    };
-
-                                    last_loop_event_id = Some(k);
-
-                                    if event_number >= from_event_number {
-                                        let event_number = EventNumber(event_number);
-                                        // the only possible error is a closed channel
-                                        if tx.start_send((stream.clone(), event_number, v)).is_err() {
-                                            info!("encountered closed channel");
-                                            break
-                                        }
+                                if is_accepted {
+                                    let event_number = EventNumber(event_number);
+                                    // the only possible error is a closed channel
+                                    if tx.start_send((stream.clone(), event_number, v)).is_err() {
+                                        info!("encountered closed channel");
+                                        break
                                     }
-
-                                    event_number += 1;
                                 }
+
+                                event_number += 1;
                             }
                         }
 
