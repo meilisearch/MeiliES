@@ -1,8 +1,5 @@
-use futures::stream::{SplitSink, SplitStream};
 use futures::{Future, Poll, Async, Stream, Sink};
-use tokio::codec::{Decoder, Framed};
-use tokio::net::TcpStream;
-use meilies::codec::{RespCodec, RespValue};
+use meilies::codec::RespValue;
 use meilies::stream::{Stream as EsStream, EventNumber};
 
 use super::{RespConnection, RespConnectionReader};

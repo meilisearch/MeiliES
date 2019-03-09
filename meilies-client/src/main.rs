@@ -6,8 +6,8 @@ use structopt::StructOpt;
 use tokio::prelude::*;
 use futures::stream::Stream;
 
-use meilies_client::sub_connect;
-use meilies::stream::Stream as EsStream;
+use meilies_client::{sub_connect, paired_connect};
+use meilies::stream::{StreamName, Stream as EsStream};
 
 #[derive(Debug, StructOpt)]
 #[structopt(name = "meilies-cli", about = "A basic cli for MeiliES.")]
@@ -38,17 +38,30 @@ fn main() {
     let cmd_args: Vec<_> = opt.cmd_args.iter().map(|s| s.as_str()).collect();
     let client = match cmd_args.as_slice() {
         &["subscribe", stream] => {
+            eprintln!("Reading events... (press Ctrl-C to quit)");
+
             let stream = EsStream::from_str(stream).unwrap();
-            sub_connect(&addr)
-                .map_err(|_| ())
+
+            let client = sub_connect(&addr)
+                .map_err(|e| eprintln!("{}", e))
                 .and_then(|conn| conn.subscribe_to(stream))
                 .and_then(|msgs| msgs.for_each(|msg| {
                     println!("{:?}", msg);
                     future::ok(())
-                }))
+                }));
+
+            future::Either::A(client)
         },
         &["publish", stream, event] => {
-            unimplemented!()
+            let stream = StreamName::from_str(stream).unwrap();
+            let event = event.as_bytes().to_vec();
+
+            let client = paired_connect(&addr)
+                .map_err(|e| eprintln!("{}", e))
+                .and_then(|conn| conn.publish(stream, event))
+                .and_then(|_conn| future::ok(()));
+
+            future::Either::B(client)
         }
         _ => unimplemented!(),
     };
