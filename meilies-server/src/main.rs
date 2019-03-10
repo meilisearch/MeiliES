@@ -136,7 +136,7 @@ fn execute_command(db: Db, command: Command) -> Result<CommandReturn, Error> {
 
                                 let is_accepted = match stream.from {
                                     StartReadFrom::EventNumber(number) => event_number >= number,
-                                    StartReadFrom::End => true,
+                                    StartReadFrom::End => false,
                                 };
 
                                 if is_accepted {
@@ -243,12 +243,12 @@ fn main() {
                     CommandReturn::Subscribe { streams, events } => {
                         let events = events
                             .map(|(stream, event_number, v)| {
-                                let event_text = RespValue::SimpleString("event".to_owned());
-                                let stream = RespValue::bulk_string(stream.to_string());
+                                let type_ = RespValue::SimpleString("event".to_owned());
+                                let stream = RespValue::SimpleString(stream.to_string());
                                 let event_number = RespValue::Integer(event_number.0 as i64);
                                 let value = RespValue::bulk_string(v.to_vec());
 
-                                RespValue::Array(vec![event_text, stream, event_number, value])
+                                RespValue::Array(vec![type_, stream, event_number, value])
                             })
                             .map_err(|e| {
                                 error!("{}", e);
@@ -257,7 +257,7 @@ fn main() {
 
                         let subscribed = RespValue::Array(vec![
                             RespValue::SimpleString("subscribed".to_string()),
-                            RespValue::Array(streams.into_iter().map(|s| RespValue::bulk_string(s.to_string())).collect()),
+                            RespValue::Array(streams.into_iter().map(|s| RespValue::SimpleString(s.to_string())).collect()),
                         ]);
 
                         let responses = writer

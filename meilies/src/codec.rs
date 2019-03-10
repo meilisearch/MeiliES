@@ -36,6 +36,29 @@ impl RespValue {
     }
 }
 
+impl PartialEq<&'_ str> for RespValue {
+    fn eq(&self, other: &&'_ str) -> bool {
+        match self {
+            RespValue::SimpleString(string) => string == other,
+            RespValue::Error(error) => error == other,
+            RespValue::BulkString(bytes) => bytes.as_slice() == other.as_bytes(),
+            _ => false,
+        }
+    }
+}
+
+impl PartialEq<str> for RespValue {
+    fn eq(&self, other: &str) -> bool {
+        self == &other
+    }
+}
+
+impl PartialEq<String> for RespValue {
+    fn eq(&self, other: &String) -> bool {
+        self == other.as_str()
+    }
+}
+
 impl fmt::Debug for RespValue {
     fn fmt(&self, fmt: &mut fmt::Formatter) -> fmt::Result {
         match self {
