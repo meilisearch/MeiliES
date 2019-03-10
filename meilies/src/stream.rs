@@ -81,6 +81,34 @@ impl From<StreamName> for Stream {
     }
 }
 
+impl From<(StreamName, StartReadFrom)> for Stream {
+    fn from((name, from): (StreamName, StartReadFrom)) -> Stream {
+        Stream { name, from }
+    }
+}
+
+impl FromStr for Stream {
+    type Err = ParseStreamError;
+
+    fn from_str(s: &str) -> Result<Stream, Self::Err> {
+        use ParseStreamError::*;
+
+        let mut split = s.split(':');
+        match (split.next(), split.next(), split.next()) {
+            (Some(name), None, None) => {
+                let name = StreamName::from_str(name).map_err(StreamNameError)?;
+                Ok(Stream::from(name))
+            },
+            (Some(name), Some(from), None) => {
+                let name = StreamName::new(name.to_owned()).map_err(StreamNameError)?;
+                let number = u64::from_str_radix(from, 10).map_err(StartFromError)?;
+                Ok(Stream { name, from: StartReadFrom::EventNumber(number) })
+            },
+            (_, _, _) => Err(FormatError),
+        }
+    }
+}
+
 impl fmt::Display for Stream {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         match self.from {
@@ -105,28 +133,6 @@ impl fmt::Display for ParseStreamError {
             StreamNameError(e) => write!(f, "stream not properly formatted; {}", e),
             StartFromError(e) => write!(f, "stream \"start from\" not properly formatted; {}", e),
             FormatError => f.write_str("stream is not properly formatted"),
-        }
-    }
-}
-
-impl FromStr for Stream {
-    type Err = ParseStreamError;
-
-    fn from_str(s: &str) -> Result<Stream, Self::Err> {
-        use ParseStreamError::*;
-
-        let mut split = s.split(':');
-        match (split.next(), split.next(), split.next()) {
-            (Some(name), None, None) => {
-                let name = StreamName::from_str(name).map_err(StreamNameError)?;
-                Ok(Stream::from(name))
-            },
-            (Some(name), Some(from), None) => {
-                let name = StreamName::new(name.to_owned()).map_err(StreamNameError)?;
-                let number = u64::from_str_radix(from, 10).map_err(StartFromError)?;
-                Ok(Stream { name, from: StartReadFrom::EventNumber(number) })
-            },
-            (_, _, _) => Err(FormatError),
         }
     }
 }
