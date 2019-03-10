@@ -49,7 +49,7 @@ fn main() {
                 let stream = stream.clone();
 
                 sub_connect(&addr)
-                    .map_err(|e| eprintln!("{}", e))
+                    .map_err(|e| error!("{}", e))
                     .and_then(|conn| conn.subscribe_to(stream))
                     .and_then(|msgs| msgs.for_each(|msg| {
                         println!("{:?}", msg);
@@ -60,7 +60,7 @@ fn main() {
                         Err(())
                     })
             })
-            .map_err(|e| eprintln!("{:?}", e));
+            .map_err(|e| error!("{:?}", e));
 
             future::Either::A(fut)
         },
@@ -73,12 +73,12 @@ fn main() {
                 let event = event.clone();
 
                 paired_connect(&addr)
-                    .map_err(|e| eprintln!("{}", e))
+                    .map_err(|e| error!("{}", e))
                     .and_then(|conn| conn.publish(stream, event))
                     .and_then(|_conn| future::ok(()))
                     .map(|()| println!("Event sent to the stream"))
             })
-            .map_err(|e| eprintln!("{:?}", e));
+            .map_err(|e| error!("{:?}", e));
 
             future::Either::B(fut)
         }

@@ -1,10 +1,9 @@
 use std::collections::HashSet;
 use std::iter::FromIterator;
-use std::str::FromStr;
 
 use futures::{Future, Poll, Async, Stream, Sink};
 use futures::task;
-use meilies::codec::RespValue;
+use meilies::codec::{RespValue, FromResp};
 use meilies::stream::{Stream as EsStream, EventNumber};
 use log::{info, warn};
 
@@ -54,9 +53,8 @@ impl Stream for SubStream {
             .poll()
             .map_err(|_| ())
             .and_then(|async_| {
-                let array = match async_ {
-                    Async::Ready(Some(RespValue::Array(array))) => array,
-                    Async::Ready(Some(other)) => return Err(()),
+                let array: Vec<RespValue> = match async_ {
+                    Async::Ready(Some(value)) => FromResp::from_resp(value)?,
                     Async::Ready(None) => return Ok(Async::Ready(None)),
                     Async::NotReady => return Ok(Async::NotReady),
                 };
@@ -65,30 +63,23 @@ impl Stream for SubStream {
 
                 let type_ = match iter.next() {
                     Some(type_) => type_,
-                    None => unimplemented!(),
+                    None => return Err(()),
                 };
 
                 if type_ == "subscribed" {
-                    let streams = match iter.next() {
-                        Some(RespValue::Array(array)) => array,
-                        _ => unimplemented!(),
+
+                    let streams: Vec<EsStream> = match iter.next() {
+                        Some(value) => FromResp::from_resp(value)?,
+                        None => return Err(()),
                     };
 
                     for stream in streams {
-                        let stream = match stream {
-                            RespValue::SimpleString(string) => EsStream::from_str(&string).unwrap(),
-                            other => unimplemented!(),
-                        };
-
                         match self.pending.take(&stream) {
                             Some(stream) => {
                                 info!("Pended \"{}\" subscription accepted", stream);
                                 self.streams.insert(stream);
                             },
-                            None => {
-                                warn!("Received non-pended \"{}\" subscription", stream);
-                                unimplemented!()
-                            },
+                            None => warn!("Received a non-pended subscription to \"{}\"", stream),
                         }
                     }
 
@@ -97,25 +88,26 @@ impl Stream for SubStream {
                     Ok(Async::NotReady)
                 }
                 else if type_ == "event" {
-                    let stream = match iter.next() {
-                        Some(RespValue::SimpleString(string)) => EsStream::from_str(&string).unwrap(),
-                        _ => unimplemented!(),
+
+                    let stream: EsStream = match iter.next() {
+                        Some(value) => FromResp::from_resp(value).map_err(|_| ())?,
+                        None => return Err(()),
                     };
 
-                    let event_number = match iter.next() {
-                        Some(RespValue::Integer(integer)) => EventNumber(integer as u64),
-                        _ => unimplemented!(),
+                    let event_number: EventNumber = match iter.next() {
+                        Some(value) => FromResp::from_resp(value)?,
+                        None => return Err(()),
                     };
 
-                    let event = match iter.next() {
-                        Some(RespValue::BulkString(bytes)) => bytes,
-                        _ => unimplemented!(),
+                    let event: Vec<u8> = match iter.next() {
+                        Some(value) => FromResp::from_resp(value)?,
+                        None => return Err(()),
                     };
 
                     Ok(Async::Ready(Some((stream, event_number, event))))
                 }
                 else {
-                    unimplemented!()
+                    Err(())
                 }
             })
     }

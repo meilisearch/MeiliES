@@ -243,8 +243,8 @@ fn main() {
                     CommandReturn::Subscribe { streams, events } => {
                         let events = events
                             .map(|(stream, event_number, v)| {
-                                let type_ = RespValue::SimpleString("event".to_owned());
-                                let stream = RespValue::SimpleString(stream.to_string());
+                                let type_ = RespValue::string("event");
+                                let stream = RespValue::string(stream);
                                 let event_number = RespValue::Integer(event_number.0 as i64);
                                 let value = RespValue::bulk_string(v.to_vec());
 
