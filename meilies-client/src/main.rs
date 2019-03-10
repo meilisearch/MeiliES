@@ -7,7 +7,7 @@ use structopt::StructOpt;
 use tokio::prelude::*;
 use tokio_retry::{Retry, strategy::ExponentialBackoff};
 
-use meilies_client::{sub_connect, paired_connect};
+use meilies_client::{sub_connect, paired_connect, Message};
 use meilies::stream::{StreamName, Stream as EsStream};
 
 #[derive(Debug, StructOpt)]
@@ -50,11 +50,23 @@ fn main() {
 
                 sub_connect(&addr)
                     .map_err(|e| error!("{}", e))
-                    .and_then(|conn| conn.subscribe_to(stream))
-                    .and_then(|msgs| msgs.for_each(|msg| {
-                        println!("{:?}", msg);
-                        future::ok(())
-                    }))
+                    .and_then(|(mut ctrl, msgs)| {
+
+                        ctrl.subscribe_to(stream);
+
+                        msgs.for_each(move |msg| {
+                            println!("{:?}", msg);
+
+                            if let Message::Event(_, _, event) = msg {
+                                if event == b"abonne-toi" {
+                                    println!("Ok, I'll do it!");
+                                    ctrl.subscribe_to(EsStream::from_str("coco").unwrap());
+                                }
+                            }
+
+                            future::ok(())
+                        })
+                    })
                     .and_then(|()| {
                         println!("Connection closed by the server");
                         Err(())

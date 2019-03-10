@@ -12,7 +12,7 @@ use log::warn;
 mod sub;
 mod paired;
 
-pub use self::sub::{SubStream, SubConnection};
+pub use self::sub::{SubscriptionStream, SubscriptionController, Message};
 pub use self::paired::PairedConnection;
 
 pub type RespConnection = Framed<TcpStream, RespCodec>;
@@ -31,8 +31,8 @@ pub fn connect(addr: &SocketAddr) -> impl Future<Item=RespConnection, Error=io::
         })
 }
 
-pub fn sub_connect(addr: &SocketAddr) -> impl Future<Item=SubConnection, Error=io::Error> {
-    connect(&addr).map(SubConnection::new)
+pub fn sub_connect(addr: &SocketAddr) -> impl Future<Item=(SubscriptionController, SubscriptionStream), Error=io::Error> {
+    connect(&addr).map(self::sub::sub_stream)
 }
 
 pub fn paired_connect(addr: &SocketAddr) -> impl Future<Item=PairedConnection, Error=io::Error> {

@@ -1,51 +1,60 @@
-use std::collections::HashSet;
-use std::iter::FromIterator;
-
 use futures::{Future, Poll, Async, Stream, Sink};
-use futures::task;
-use meilies::codec::{RespValue, FromResp};
+use meilies::codec::{RespValue, RespMsgError, FromResp};
 use meilies::stream::{Stream as EsStream, EventNumber};
-use log::{info, warn};
+use tokio::sync::mpsc;
+use tokio::prelude::stream;
+use log::{info, warn, error};
 
 use super::{RespConnection, RespConnectionReader};
 
-pub struct SubConnection {
-    connection: RespConnection,
+pub fn sub_stream(connection: RespConnection) -> (SubscriptionController, SubscriptionStream) {
+    let (writer, reader) = connection.split();
+    let (sender, receiver) = mpsc::unbounded_channel();
+
+    let x = receiver
+        .map_err(|_| RespMsgError::IoError(unimplemented!()))
+        .forward(writer)
+        .map(|_| ())
+        .map_err(|e| eprintln!("error; {}", e));
+
+    tokio::spawn(x);
+
+    let controller = SubscriptionController { sender };
+    let sub_stream = SubscriptionStream { connection: reader };
+
+    (controller, sub_stream)
 }
 
-impl SubConnection {
-    pub fn new(connection: RespConnection) -> SubConnection {
-        SubConnection { connection }
-    }
+#[derive(Clone)]
+pub struct SubscriptionController {
+    sender: mpsc::UnboundedSender<RespValue>,
+}
 
-    pub fn subscribe_to(self, stream: EsStream) -> impl Future<Item=SubStream, Error=()> {
+impl SubscriptionController {
+    pub fn subscribe_to(&mut self, stream: EsStream) {
         let command = RespValue::Array(vec![
             RespValue::bulk_string("subscribe"),
             RespValue::bulk_string(stream.to_string()),
         ]);
 
-        self.connection
-            .send(command)
-            .map_err(|e| eprintln!("error: {:?}", e))
-            .and_then(|framed| {
-                let (_writer, reader) = framed.split();
-                Ok(SubStream {
-                    streams: HashSet::new(),
-                    pending: HashSet::from_iter(Some(stream)),
-                    connection: reader,
-                })
-            })
+        if let Err(e) = self.sender.try_send(command) {
+            error!("error; {}", e);
+        }
     }
 }
 
-pub struct SubStream {
-    streams: HashSet<EsStream>,
-    pending: HashSet<EsStream>,
+pub struct SubscriptionStream {
     connection: RespConnectionReader,
 }
 
-impl Stream for SubStream {
-    type Item = (EsStream, EventNumber, Vec<u8>);
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum Message {
+    SubscribedTo(Vec<EsStream>),
+    Event(EsStream, EventNumber, Vec<u8>),
+}
+
+impl Stream for SubscriptionStream {
+    type Item = Message;
     type Error = ();
 
     fn poll(&mut self) -> Poll<Option<Self::Item>, Self::Error> {
@@ -73,19 +82,8 @@ impl Stream for SubStream {
                         None => return Err(()),
                     };
 
-                    for stream in streams {
-                        match self.pending.take(&stream) {
-                            Some(stream) => {
-                                info!("Pended \"{}\" subscription accepted", stream);
-                                self.streams.insert(stream);
-                            },
-                            None => warn!("Received a non-pended subscription to \"{}\"", stream),
-                        }
-                    }
-
-                    task::current().notify();
-
-                    Ok(Async::NotReady)
+                    let message = Message::SubscribedTo(streams);
+                    Ok(Async::Ready(Some(message)))
                 }
                 else if type_ == "event" {
 
@@ -104,7 +102,8 @@ impl Stream for SubStream {
                         None => return Err(()),
                     };
 
-                    Ok(Async::Ready(Some((stream, event_number, event))))
+                    let message = Message::Event(stream, event_number, event);
+                    Ok(Async::Ready(Some(message)))
                 }
                 else {
                     Err(())

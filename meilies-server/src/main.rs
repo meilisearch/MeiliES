@@ -4,29 +4,21 @@ use std::{env, fmt};
 use std::sync::Arc;
 
 use futures::future::poll_fn;
-use futures::future::Either;
 use log::{info, error};
-use sled::{Db, Event, IVec};
+use sled::{Db, Tree, Event};
 use tokio::codec::Decoder;
 use tokio::net::TcpListener;
 use tokio::prelude::*;
 use tokio::sync::mpsc;
 
-use meilies::codec::{RespCodec, RespValue};
+use meilies::codec::{RespCodec, RespMsgError, RespValue};
 use meilies::command::{Command, CommandError};
-use meilies::stream::{self as es_stream, EventNumber, StartReadFrom};
+use meilies::stream::{Stream as EsStream, StartReadFrom};
 use event_id::EventId;
 
 mod event_id;
 
-enum CommandReturn {
-    Publish,
-    Subscribe {
-        streams: Vec<es_stream::Stream>,
-        events: mpsc::UnboundedReceiver<(es_stream::Stream, EventNumber, IVec)>,
-    },
-}
-
+#[derive(Debug)]
 enum Error<Actual=()> {
     InvalidRequest(RequestError),
     InvalidCommand(CommandError),
@@ -51,6 +43,7 @@ impl<A> From<sled::Error<A>> for Error<A> {
     }
 }
 
+#[derive(Debug)]
 enum RequestError {
     NotAnArrayOfBulkStrings,
 }
@@ -83,102 +76,97 @@ fn resp_into_arguments(value: RespValue) -> Result<Vec<Vec<u8>>, RequestError> {
     Ok(args)
 }
 
-// TODO introduce a Context type???
-fn execute_command(db: Db, command: Command) -> Result<CommandReturn, Error> {
-    match command {
-        Command::Publish { stream, event } => {
-            let tree = db.open_tree(stream.into_bytes())?;
+fn send_stream_events(
+    stream: EsStream,
+    tree: Arc<Tree>,
+    mut sender: mpsc::UnboundedSender<RespValue>,
+) {
+    info!("spawning a blocking subscription for {}", stream);
 
-            let event_id = EventId::from(db.generate_id()?);
-            tree.set(event_id, event)?;
+    let subscribed = RespValue::Array(vec![
+        RespValue::SimpleString("subscribed".to_string()),
+        RespValue::Array(vec![RespValue::string(stream.clone())]),
+    ]);
 
-            Ok(CommandReturn::Publish)
-        },
-        Command::Subscribe { streams } => {
-            let (tx, rx) = mpsc::unbounded_channel();
-            let mut streams_names = Vec::with_capacity(streams.len());
+    if sender.start_send(subscribed).is_err() {
+        info!("encountered closed channel");
+    }
 
-            for stream in streams.clone() {
-                streams_names.push(stream.name.clone());
-                let tree = db.open_tree(stream.name.clone().into_bytes())?;
-                let mut tx = tx.clone();
+    let mut watcher = tree.watch_prefix(vec![]);
+    let mut event_number = 0;
+    let mut last_loop_event_id = None;
+    let mut has_more_events = true;
 
-                tokio::spawn(poll_fn(move || {
-                    tokio_threadpool::blocking(|| {
-                        info!("spawning a blocking subscription");
+    while has_more_events {
+        // reset the watcher at each new loop
+        watcher = tree.watch_prefix(vec![]);
 
-                        let mut watcher = tree.watch_prefix(vec![]);
-                        let mut event_number = 0;
-                        let mut last_loop_event_id = None;
-                        let mut has_more_events = true;
+        // if this is not the first iteration: skip the last unique id seen
+        let range = match last_loop_event_id.take() {
+            Some(id) => (Excluded(id), Unbounded),
+            None     => (Unbounded,    Unbounded),
+        };
 
-                        while has_more_events {
-                            // reset the watcher at each new loop
-                            watcher = tree.watch_prefix(vec![]);
+        has_more_events = false;
 
-                            // if this is not the first iteration: skip the last unique id seen
-                            let range = match last_loop_event_id.take() {
-                                Some(id) => (Excluded(id), Unbounded),
-                                None     => (Unbounded,    Unbounded),
-                            };
+        for result in tree.range(range) {
+            has_more_events = true;
 
-                            has_more_events = false;
+            let (key, value) = match result {
+                Ok(key_value) => key_value,
+                Err(e) => return error!("error while iterating on tree; {}", e),
+            };
 
-                            for result in tree.range(range) {
-                                has_more_events = true;
+            last_loop_event_id = Some(key);
 
-                                let (k, v) = match result {
-                                    Ok(key_value) => key_value,
-                                    Err(e) => return error!("error while iterating on tree; {}", e),
-                                };
+            let is_accepted = match stream.from {
+                StartReadFrom::EventNumber(number) => event_number >= number,
+                StartReadFrom::End => false,
+            };
 
-                                last_loop_event_id = Some(k);
+            if is_accepted {
+                let response = RespValue::Array(vec![
+                    RespValue::string("event"),
+                    RespValue::string(stream.clone()),
+                    RespValue::Integer(event_number as i64),
+                    RespValue::bulk_string(value.to_vec()),
+                ]);
 
-                                let is_accepted = match stream.from {
-                                    StartReadFrom::EventNumber(number) => event_number >= number,
-                                    StartReadFrom::End => false,
-                                };
-
-                                if is_accepted {
-                                    let event_number = EventNumber(event_number);
-                                    // the only possible error is a closed channel
-                                    if tx.start_send((stream.clone(), event_number, v)).is_err() {
-                                        info!("encountered closed channel");
-                                        break
-                                    }
-                                }
-
-                                event_number += 1;
-                            }
-                        }
-
-                        for event in watcher {
-                            if let Event::Set(_, value) = event {
-
-                                let is_accepted = match stream.from {
-                                    StartReadFrom::EventNumber(number) => event_number >= number,
-                                    StartReadFrom::End => true,
-                                };
-
-                                if is_accepted {
-                                    let event_number = EventNumber(event_number);
-                                    let value = IVec::Remote { buf: Arc::from(value) };
-                                    // the only possible error is a closed channel
-                                    if tx.start_send((stream.clone(), event_number, value)).is_err() {
-                                        info!("encountered closed channel");
-                                        break
-                                    }
-                                }
-
-                                event_number += 1;
-                            }
-                        }
-                    })
-                    .map_err(|e| error!("{}", e))
-                }));
+                // the only possible error is a closed channel
+                if sender.start_send(response).is_err() {
+                    info!("encountered closed channel");
+                    break
+                }
             }
 
-            Ok(CommandReturn::Subscribe { streams, events: rx })
+            event_number += 1;
+        }
+    }
+
+    for event in watcher {
+        if let Event::Set(_, value) = event {
+
+            let is_accepted = match stream.from {
+                StartReadFrom::EventNumber(number) => event_number >= number,
+                StartReadFrom::End => true,
+            };
+
+            if is_accepted {
+                let response = RespValue::Array(vec![
+                    RespValue::string("event"),
+                    RespValue::string(stream.clone()),
+                    RespValue::Integer(event_number as i64),
+                    RespValue::bulk_string(value),
+                ]);
+
+                // the only possible error is a closed channel
+                if sender.start_send(response).is_err() {
+                    info!("encountered closed channel");
+                    break
+                }
+            }
+
+            event_number += 1;
         }
     }
 }
@@ -211,67 +199,69 @@ fn main() {
         .for_each(move |socket| {
             let framed = RespCodec::default().framed(socket);
             let (writer, reader) = framed.split();
+            let (sender, receiver) = mpsc::unbounded_channel();
 
             let db = db.clone();
-            let responses = reader.map(move |value| {
-                let args = match resp_into_arguments(value) {
-                    Ok(args) => args,
-                    Err(e) => return Err(Error::InvalidRequest(e)),
-                };
 
-                let command = match Command::from_args(args) {
-                    Ok(command) => command,
-                    Err(e) => return Err(Error::InvalidCommand(e)),
-                };
+            let requests = reader
+                .map(move |value| {
+                    let args = match resp_into_arguments(value) {
+                        Ok(args) => args,
+                        Err(e) => return Err(Error::InvalidRequest(e)),
+                    };
 
-                execute_command(db.clone(), command)
-            })
-            .map_err(|e| {
-                // FIXME return the error to the client
-                error!("{}", e);
-                e
-            });
+                    Command::from_args(args).map_err(Error::InvalidCommand)
+                })
+                .for_each(move |msg: Result<Command, Error>| {
+                    match msg {
+                        Ok(Command::Subscribe { streams }) => {
+                            for stream in streams {
+                                let sender = sender.clone();
+                                let stream_name = stream.name.clone();
+                                let tree = db.open_tree(stream_name.into_bytes()).unwrap();
 
-            let writes = responses.fold(writer, |writer, result| {
-                let command_return = match result {
-                    Ok(command_return) => command_return,
-                    Err(e) => return Either::A(writer.send(RespValue::error(e))),
-                };
+                                tokio::spawn(poll_fn(move || {
+                                    let sender = sender.clone();
+                                    let stream = stream.clone();
+                                    let tree = tree.clone();
 
-                match command_return {
-                    CommandReturn::Publish => Either::A(writer.send(RespValue::string("OK"))),
-                    CommandReturn::Subscribe { streams, events } => {
-                        let events = events
-                            .map(|(stream, event_number, v)| {
-                                let type_ = RespValue::string("event");
-                                let stream = RespValue::string(stream);
-                                let event_number = RespValue::Integer(event_number.0 as i64);
-                                let value = RespValue::bulk_string(v.to_vec());
+                                    tokio_threadpool::blocking(move || {
+                                        send_stream_events(stream, tree, sender)
+                                    })
+                                    .map_err(|e| error!("error; {}", e))
+                                }));
+                            }
+                        },
+                        Ok(Command::Publish { stream, event }) => {
+                            let db = db.clone();
+                            let mut sender = sender.clone();
 
-                                RespValue::Array(vec![type_, stream, event_number, value])
-                            })
-                            .map_err(|e| {
-                                error!("{}", e);
-                                std::io::Error::new(std::io::ErrorKind::Other, e)
-                            });
+                            let tree = db.open_tree(stream.into_bytes()).unwrap();
 
-                        let subscribed = RespValue::Array(vec![
-                            RespValue::SimpleString("subscribed".to_string()),
-                            RespValue::Array(streams.into_iter().map(|s| RespValue::SimpleString(s.to_string())).collect()),
-                        ]);
+                            let event_id = EventId::from(db.generate_id().unwrap());
+                            tree.set(event_id, event).unwrap();
 
-                        let responses = writer
-                            .send(subscribed)
-                            .and_then(|writer| writer.send_all(events).map(|(s, _)| s));
-
-                        Either::B(responses)
+                            if sender.start_send(RespValue::string("OK")).is_err() {
+                                info!("encountered closed channel");
+                            }
+                        }
+                        Err(e) => error!("error; {}", e),
                     }
-                }
-            });
 
-            let msg = writes.then(|_| Ok(()));
+                    future::ok(())
+                })
+                .map_err(|e| error!("error; {}", e));
 
-            tokio::spawn(msg)
+            let responses = receiver
+                .map_err(|e| RespMsgError::IoError(unimplemented!()))
+                .forward(writer)
+                .map_err(|e| error!("error; {}", e))
+                .map(|_| ());
+
+            tokio::spawn(requests);
+            tokio::spawn(responses);
+
+            future::ok(())
         });
 
     tokio::run(server)
