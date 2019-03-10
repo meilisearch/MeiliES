@@ -1,10 +1,11 @@
 use std::str::FromStr;
 use std::net::ToSocketAddrs;
 
+use futures::stream::Stream;
 use log::error;
 use structopt::StructOpt;
 use tokio::prelude::*;
-use futures::stream::Stream;
+use tokio_retry::{Retry, strategy::ExponentialBackoff};
 
 use meilies_client::{sub_connect, paired_connect};
 use meilies::stream::{StreamName, Stream as EsStream};
@@ -35,36 +36,51 @@ fn main() {
         Err(e) => return error!("error parsing addr; {}", e),
     };
 
+    let retry_strategy = ExponentialBackoff::from_millis(10).take(5);
+
     let cmd_args: Vec<_> = opt.cmd_args.iter().map(|s| s.as_str()).collect();
-    let client = match cmd_args.as_slice() {
+    let fut = match cmd_args.as_slice() {
         &["subscribe", stream] => {
             eprintln!("Reading events... (press Ctrl-C to quit)");
 
             let stream = EsStream::from_str(stream).unwrap();
 
-            let client = sub_connect(&addr)
-                .map_err(|e| eprintln!("{}", e))
-                .and_then(|conn| conn.subscribe_to(stream))
-                .and_then(|msgs| msgs.for_each(|msg| {
-                    println!("{:?}", msg);
-                    future::ok(())
-                }));
+            let fut = Retry::spawn(retry_strategy, move || {
+                let stream = stream.clone();
 
-            future::Either::A(client)
+                sub_connect(&addr)
+                    .map_err(|e| eprintln!("{}", e))
+                    .and_then(|conn| conn.subscribe_to(stream))
+                    .and_then(|msgs| msgs.for_each(|msg| {
+                        println!("{:?}", msg);
+                        future::ok(())
+                    }))
+                    .map(|()| println!("Connection closed by the server"))
+            })
+            .map_err(|e| eprintln!("{:?}", e));
+
+            future::Either::A(fut)
         },
         &["publish", stream, event] => {
             let stream = StreamName::from_str(stream).unwrap();
             let event = event.as_bytes().to_vec();
 
-            let client = paired_connect(&addr)
-                .map_err(|e| eprintln!("{}", e))
-                .and_then(|conn| conn.publish(stream, event))
-                .and_then(|_conn| future::ok(()));
+            let fut = Retry::spawn(retry_strategy, move || {
+                let stream = stream.clone();
+                let event = event.clone();
 
-            future::Either::B(client)
+                paired_connect(&addr)
+                    .map_err(|e| eprintln!("{}", e))
+                    .and_then(|conn| conn.publish(stream, event))
+                    .and_then(|_conn| future::ok(()))
+                    .map(|()| println!("Event sent to the stream"))
+            })
+            .map_err(|e| eprintln!("{:?}", e));
+
+            future::Either::B(fut)
         }
-        _ => unimplemented!(),
+        unknow => return eprintln!("invalid command: {:?}", unknow),
     };
 
-    tokio::run(client);
+    tokio::run(fut);
 }

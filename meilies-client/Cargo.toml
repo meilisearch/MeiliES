@@ -11,3 +11,4 @@ meilies = { version = "0.1", path = "../meilies" }
 stderrlog = "0.4.1"
 structopt = { version = "0.2.14", default-features = false }
 tokio = "0.1.16"
+tokio-retry = "0.2.0"
