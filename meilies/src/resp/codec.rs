@@ -26,25 +26,14 @@ pub enum RespMsgError {
 
 impl fmt::Display for RespMsgError {
     fn fmt(&self, fmt: &mut fmt::Formatter) -> fmt::Result {
+        use RespMsgError::*;
         match self {
-            RespMsgError::InvalidPrefixByte(byte) => {
-                write!(fmt, "InvalidPrefixByte: {:?}", byte)
-            },
-            RespMsgError::InvalidInteger(error) => {
-                write!(fmt, "InvalidInteger: {}", error)
-            },
-            RespMsgError::InvalidUtf8String(error) => {
-                write!(fmt, "InvalidUtf8String: {}", error)
-            },
-            RespMsgError::SimpleStringContainCrlf => {
-                write!(fmt, "SimpleStringContainCrlf")
-            },
-            RespMsgError::MissingBulkStringFinalCrlf => {
-                write!(fmt, "MissingBulkStringFinalCrlf")
-            },
-            RespMsgError::IoError(error) => {
-                write!(fmt, "IoError: {}", error)
-            },
+            InvalidPrefixByte(byte) => write!(fmt, "invalid prefix byte: {:?}", byte),
+            InvalidInteger(error) => write!(fmt, "invalid integer: {}", error),
+            InvalidUtf8String(error) => write!(fmt, "invalid utf8 string: {}", error),
+            SimpleStringContainCrlf => write!(fmt, "simple string contain crlf"),
+            MissingBulkStringFinalCrlf => write!(fmt, "missing bulk string final crlf"),
+            IoError(error) => write!(fmt, "io error: {}", error),
         }
     }
 }
