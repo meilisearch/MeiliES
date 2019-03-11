@@ -80,10 +80,22 @@ pub enum StartReadFrom {
     End,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
+#[derive(Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub struct Stream {
     pub name: StreamName,
     pub from: StartReadFrom,
+}
+
+impl fmt::Debug for Stream {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        write!(f, "\"{}", self.name.0)?;
+
+        if let StartReadFrom::EventNumber(number) = self.from {
+            write!(f, ":{}", number)?;
+        }
+
+        write!(f, "\"")
+    }
 }
 
 #[derive(Debug)]
