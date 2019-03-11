@@ -1,6 +1,9 @@
-use crate::stream::{Stream, StreamName, StreamNameError, ParseStreamError};
 use std::str::FromStr;
 use std::{fmt, str, string};
+
+use crate::codec::RespValue;
+use crate::from_resp::FromResp;
+use crate::stream::{Stream, StreamName, StreamNameError, ParseStreamError};
 
 pub enum Command {
     Publish { stream: StreamName, event: Vec<u8> },
@@ -28,61 +31,15 @@ impl fmt::Debug for Command {
     }
 }
 
-#[derive(Debug)]
-pub enum CommandError {
-    InvalidStream(ParseStreamError),
-    CommandNotFound,
-    MissingCommandName,
-    InvalidNumberOfArguments { expected: usize },
-    InvalidUtf8String(str::Utf8Error),
-}
+impl FromResp for Command {
+    type Error = CommandError;
 
-impl fmt::Display for CommandError {
-    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-        match self {
-            CommandError::InvalidStream(e) => write!(f, "invalid stream; {}", e),
-            CommandError::CommandNotFound => {
-                write!(f, "command not found")
-            },
-            CommandError::MissingCommandName => {
-                write!(f, "missing command name")
-            },
-            CommandError::InvalidNumberOfArguments { expected } => {
-                write!(f, "invalid number of arguments (expected {})", expected)
-            },
-            CommandError::InvalidUtf8String(error) => {
-                write!(f, "invalid utf8 string: {}", error)
-            },
-        }
-    }
-}
+    fn from_resp(value: RespValue) -> Result<Self, Self::Error> {
+        let mut args = match Vec::<Vec<u8>>::from_resp(value) {
+            Ok(args) => args,
+            Err(e) => return Err(CommandError::InvalidRespType),
+        };
 
-impl From<str::Utf8Error> for CommandError {
-    fn from(error: str::Utf8Error) -> CommandError {
-        CommandError::InvalidUtf8String(error)
-    }
-}
-
-impl From<string::FromUtf8Error> for CommandError {
-    fn from(error: string::FromUtf8Error) -> CommandError {
-        CommandError::InvalidUtf8String(error.utf8_error())
-    }
-}
-
-impl From<ParseStreamError> for CommandError {
-    fn from(error: ParseStreamError) -> CommandError {
-        CommandError::InvalidStream(error)
-    }
-}
-
-impl From<StreamNameError> for CommandError {
-    fn from(error: StreamNameError) -> CommandError {
-        CommandError::InvalidStream(ParseStreamError::StreamNameError(error))
-    }
-}
-
-impl Command {
-    pub fn from_args(mut args: Vec<Vec<u8>>) -> Result<Command, CommandError> {
         let mut args = args.drain(..);
 
         let command = match args.next() {
@@ -112,5 +69,55 @@ impl Command {
             },
             _ => Err(CommandError::CommandNotFound),
         }
+    }
+}
+
+#[derive(Debug)]
+pub enum CommandError {
+    InvalidRespType,
+    InvalidStream(ParseStreamError),
+    CommandNotFound,
+    MissingCommandName,
+    InvalidNumberOfArguments { expected: usize },
+    InvalidUtf8String(str::Utf8Error),
+}
+
+impl fmt::Display for CommandError {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        use CommandError::*;
+        match self {
+            InvalidRespType => write!(f, "invalid RESP type, expected array of bulk string"),
+            InvalidStream(e) => write!(f, "invalid stream; {}", e),
+            CommandNotFound => write!(f, "command not found"),
+            MissingCommandName => write!(f, "missing command name"),
+            InvalidNumberOfArguments { expected } => {
+                write!(f, "invalid number of arguments (expected {})", expected)
+            },
+            InvalidUtf8String(error) => write!(f, "invalid utf8 string: {}", error),
+        }
+    }
+}
+
+impl From<str::Utf8Error> for CommandError {
+    fn from(error: str::Utf8Error) -> CommandError {
+        CommandError::InvalidUtf8String(error)
+    }
+}
+
+impl From<string::FromUtf8Error> for CommandError {
+    fn from(error: string::FromUtf8Error) -> CommandError {
+        CommandError::InvalidUtf8String(error.utf8_error())
+    }
+}
+
+impl From<ParseStreamError> for CommandError {
+    fn from(error: ParseStreamError) -> CommandError {
+        CommandError::InvalidStream(error)
+    }
+}
+
+impl From<StreamNameError> for CommandError {
+    fn from(error: StreamNameError) -> CommandError {
+        CommandError::InvalidStream(ParseStreamError::StreamNameError(error))
     }
 }

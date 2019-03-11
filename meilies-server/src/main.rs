@@ -229,16 +229,12 @@ fn main() {
             let requests = reader
                 .map_err(Error::RespMsgError)
                 .and_then(|value| {
-
-                    let args = FromResp::from_resp(value)?;
-                    Command::from_args(args).map_err(Error::InvalidCommand)
+                    Command::from_resp(value).map_err(Error::InvalidCommand)
                 })
                 .for_each(move |command| {
                     let db = db.clone();
-                    let mut sender = sender.clone();
-                    handle_command(command, db, sender);
-
-                    future::ok(())
+                    let sender = sender.clone();
+                    future::result(handle_command(command, db, sender))
                 })
                 .or_else(move |error| {
                     error!("error; {}", error);
