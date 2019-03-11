@@ -1,4 +1,3 @@
-use std::str::FromStr;
 use std::net::ToSocketAddrs;
 
 use futures::stream::Stream;
@@ -6,8 +5,7 @@ use log::error;
 use structopt::StructOpt;
 use tokio::prelude::*;
 
-use meilies_client::{sub_connect, paired_connect, Message};
-use meilies::stream::{StreamName, Stream as EsStream};
+use meilies_client::{sub_connect, paired_connect};
 use meilies::command::Command;
 
 #[derive(Debug, StructOpt)]
@@ -28,7 +26,7 @@ struct Opt {
 fn main() {
     let _ = stderrlog::new().color(stderrlog::ColorChoice::Never).verbosity(2).init();
 
-    let mut opt = Opt::from_args();
+    let opt = Opt::from_args();
     let addr = (opt.hostname.as_str(), opt.port);
     let addr = match addr.to_socket_addrs().map(|addrs| addrs.filter(|a| a.is_ipv4()).next()) {
         Ok(Some(addr)) => addr,
@@ -37,7 +35,10 @@ fn main() {
     };
 
     let args = opt.cmd_args.into_iter().map(Into::into).collect();
-    let command = Command::from_args(args).unwrap();
+    let command = match Command::from_args(args) {
+        Ok(command) => command,
+        Err(e) => return error!("{}", e),
+    };
 
     let fut = match command {
         Command::Subscribe { streams } => {
