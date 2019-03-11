@@ -11,7 +11,7 @@ use tokio::net::TcpListener;
 use tokio::prelude::*;
 use tokio::sync::mpsc;
 
-use meilies::command::{Command, CommandError};
+use meilies::command::{Command, RespCommandConvertError};
 use meilies::stream::{Stream as EsStream, StartReadFrom};
 use event_id::EventId;
 use meilies::resp::{
@@ -29,8 +29,7 @@ mod event_id;
 enum Error<Actual=()> {
     RespMsgError(RespMsgError),
     InvalidRequest,
-    InvalidCommand(CommandError),
-    CommandFailed(CommandError),
+    RespCommandConvertError(RespCommandConvertError),
     InternalError(sled::Error<Actual>),
 }
 
@@ -39,8 +38,7 @@ impl fmt::Display for Error {
         match self {
             Error::RespMsgError(e) => write!(f, "invalid RESP message; {}", e),
             Error::InvalidRequest => write!(f, "invalid request"),
-            Error::InvalidCommand(e) => write!(f, "invalid command; {}", e),
-            Error::CommandFailed(e) => write!(f, "command failed; {}", e),
+            Error::RespCommandConvertError(e) => write!(f, "invalid command; {}", e),
             Error::InternalError(e) => write!(f, "internal error; {}", e),
         }
     }
@@ -235,7 +233,7 @@ fn main() {
             let requests = reader
                 .map_err(Error::RespMsgError)
                 .and_then(|value| {
-                    Command::from_resp(value).map_err(Error::InvalidCommand)
+                    Command::from_resp(value).map_err(Error::RespCommandConvertError)
                 })
                 .for_each(move |command| {
                     let db = db.clone();

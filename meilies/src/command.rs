@@ -30,20 +30,93 @@ impl fmt::Debug for Command {
     }
 }
 
+impl Into<RespValue> for Command {
+    fn into(self) -> RespValue {
+        match self {
+            Command::Publish { stream, event } => {
+                RespValue::Array(vec![
+                    RespValue::bulk_string(&"publish"[..]),
+                    RespValue::bulk_string(stream.into_bytes()),
+                    RespValue::bulk_string(event),
+                ])
+            },
+            Command::Subscribe { streams } => {
+                let streams = streams.into_iter().map(|s| RespValue::bulk_string(s.to_string()));
+                let command = RespValue::bulk_string(&"subscribe"[..]);
+                let args = Some(command).into_iter().chain(streams).collect();
+
+                RespValue::Array(args)
+            }
+        }
+    }
+}
+
+#[derive(Debug)]
+pub enum RespCommandConvertError {
+    InvalidRespType,
+    MissingCommandName,
+    UnknownCommand(String),
+    InvalidStream(ParseStreamError),
+    InvalidNumberOfArguments { expected: usize },
+    InvalidUtf8String(str::Utf8Error),
+}
+
+impl From<str::Utf8Error> for RespCommandConvertError {
+    fn from(error: str::Utf8Error) -> RespCommandConvertError {
+        RespCommandConvertError::InvalidUtf8String(error)
+    }
+}
+
+impl From<string::FromUtf8Error> for RespCommandConvertError {
+    fn from(error: string::FromUtf8Error) -> RespCommandConvertError {
+        RespCommandConvertError::InvalidUtf8String(error.utf8_error())
+    }
+}
+
+impl From<ParseStreamError> for RespCommandConvertError {
+    fn from(error: ParseStreamError) -> RespCommandConvertError {
+        RespCommandConvertError::InvalidStream(error)
+    }
+}
+
+impl From<StreamNameError> for RespCommandConvertError {
+    fn from(error: StreamNameError) -> RespCommandConvertError {
+        RespCommandConvertError::InvalidStream(ParseStreamError::StreamNameError(error))
+    }
+}
+
+impl fmt::Display for RespCommandConvertError {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        use RespCommandConvertError::*;
+        match self {
+            InvalidRespType => write!(f, "invalid RESP type, expected array of bulk string"),
+            InvalidStream(e) => write!(f, "invalid stream; {}", e),
+            UnknownCommand(command) => write!(f, "command {:?} not found", command),
+            MissingCommandName => write!(f, "missing command name"),
+            InvalidNumberOfArguments { expected } => {
+                write!(f, "invalid number of arguments (expected {})", expected)
+            },
+            InvalidUtf8String(error) => write!(f, "invalid utf8 string: {}", error),
+        }
+    }
+}
+
 impl FromResp for Command {
-    type Error = CommandError;
+    type Error = RespCommandConvertError;
 
     fn from_resp(value: RespValue) -> Result<Self, Self::Error> {
+        use RespCommandConvertError::*;
+
         let mut args = match Vec::<Vec<u8>>::from_resp(value) {
             Ok(args) => args,
-            Err(e) => return Err(CommandError::InvalidRespType),
+            Err(e) => return Err(InvalidRespType),
         };
 
         let mut args = args.drain(..);
 
         let command = match args.next() {
             Some(command) => str::from_utf8(&command)?.to_lowercase(),
-            None => return Err(CommandError::MissingCommandName),
+            None => return Err(MissingCommandName),
         };
 
         match command.as_str() {
@@ -54,7 +127,7 @@ impl FromResp for Command {
                         let stream = StreamName::from_str(text)?;
                         Ok(Command::Publish { stream, event })
                     },
-                    _ => Err(CommandError::InvalidNumberOfArguments { expected: 2 })
+                    _ => Err(InvalidNumberOfArguments { expected: 2 })
                 }
             },
             "subscribe" => {
@@ -66,57 +139,7 @@ impl FromResp for Command {
                 }
                 Ok(Command::Subscribe { streams })
             },
-            _ => Err(CommandError::CommandNotFound),
+            _unknown => Err(UnknownCommand(command)),
         }
-    }
-}
-
-#[derive(Debug)]
-pub enum CommandError {
-    InvalidRespType,
-    InvalidStream(ParseStreamError),
-    CommandNotFound,
-    MissingCommandName,
-    InvalidNumberOfArguments { expected: usize },
-    InvalidUtf8String(str::Utf8Error),
-}
-
-impl fmt::Display for CommandError {
-    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-        use CommandError::*;
-        match self {
-            InvalidRespType => write!(f, "invalid RESP type, expected array of bulk string"),
-            InvalidStream(e) => write!(f, "invalid stream; {}", e),
-            CommandNotFound => write!(f, "command not found"),
-            MissingCommandName => write!(f, "missing command name"),
-            InvalidNumberOfArguments { expected } => {
-                write!(f, "invalid number of arguments (expected {})", expected)
-            },
-            InvalidUtf8String(error) => write!(f, "invalid utf8 string: {}", error),
-        }
-    }
-}
-
-impl From<str::Utf8Error> for CommandError {
-    fn from(error: str::Utf8Error) -> CommandError {
-        CommandError::InvalidUtf8String(error)
-    }
-}
-
-impl From<string::FromUtf8Error> for CommandError {
-    fn from(error: string::FromUtf8Error) -> CommandError {
-        CommandError::InvalidUtf8String(error.utf8_error())
-    }
-}
-
-impl From<ParseStreamError> for CommandError {
-    fn from(error: ParseStreamError) -> CommandError {
-        CommandError::InvalidStream(error)
-    }
-}
-
-impl From<StreamNameError> for CommandError {
-    fn from(error: StreamNameError) -> CommandError {
-        CommandError::InvalidStream(ParseStreamError::StreamNameError(error))
     }
 }
