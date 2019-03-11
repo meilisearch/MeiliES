@@ -1,12 +1,9 @@
 use std::{fmt, num, str};
-use std::str::FromStr;
 
 use bytes::{BufMut, BytesMut};
 use subslice::SubsliceExt;
 use tokio::codec::{Encoder, Decoder};
 use tokio::io;
-
-use crate::stream::{EventNumber, Stream, ParseStreamError};
 
 const CRLF_NEWLINE: &[u8; 2] = &[b'\r', b'\n'];
 const SIMPLE_STRING_CHAR:  u8 = b'+';
@@ -14,98 +11,6 @@ const ERROR_CHAR:          u8 = b'-';
 const INTEGER_CHAR:        u8 = b':';
 const BULK_STRING_CHAR:    u8 = b'$';
 const ARRAY_CHAR:          u8 = b'*';
-
-pub trait FromResp: Sized {
-    type Error;
-    fn from_resp(value: RespValue) -> Result<Self, Self::Error>;
-}
-
-impl FromResp for RespValue {
-    type Error = (); // FIXME replace with never (!)
-    fn from_resp(value: RespValue) -> Result<Self, Self::Error> {
-        Ok(value)
-    }
-}
-
-impl FromResp for String {
-    type Error = ();
-
-    fn from_resp(value: RespValue) -> Result<Self, Self::Error> {
-        match value {
-            RespValue::SimpleString(string) => Ok(string),
-            RespValue::Error(string) => Ok(string),
-            RespValue::BulkString(bytes) => String::from_utf8(bytes).map_err(|_| ()),
-            _ => Err(()),
-        }
-    }
-}
-
-impl FromResp for Stream {
-    type Error = ParseStreamError;
-    fn from_resp(value: RespValue) -> Result<Self, Self::Error> {
-        let string: String = FromResp::from_resp(value).unwrap();
-        Stream::from_str(&string)
-    }
-}
-
-impl FromResp for EventNumber {
-    type Error = ();
-    fn from_resp(value: RespValue) -> Result<Self, Self::Error> {
-        match value {
-            RespValue::Integer(integer) => Ok(EventNumber(integer as u64)),
-            _ => Err(()),
-        }
-    }
-}
-
-impl FromResp for i64 {
-    type Error = ();
-
-    fn from_resp(value: RespValue) -> Result<Self, Self::Error> {
-        match value {
-            RespValue::Integer(integer) => Ok(integer),
-            _ => Err(()),
-        }
-    }
-}
-
-impl FromResp for Vec<u8> {
-    type Error = ();
-
-    fn from_resp(value: RespValue) -> Result<Self, Self::Error> {
-        match value {
-            RespValue::SimpleString(string) => Ok(string.into_bytes()),
-            RespValue::Error(string) => Ok(string.into_bytes()),
-            RespValue::BulkString(bytes) => Ok(bytes),
-            _ => Err(()),
-        }
-    }
-}
-
-impl<T: FromResp> FromResp for Vec<T> {
-    type Error = ();
-
-    fn from_resp(value: RespValue) -> Result<Self, Self::Error> {
-        match value {
-            RespValue::Array(array) => {
-                let result: Result<Vec<_>, _> = array.into_iter().map(|e| T::from_resp(e)).collect();
-                result.map_err(|_| ())
-            },
-            _ => Err(()),
-        }
-    }
-}
-
-impl<T: FromResp> FromResp for Option<T> {
-    type Error = T::Error;
-
-    fn from_resp(value: RespValue) -> Result<Self, Self::Error> {
-        match value {
-            RespValue::Nil => Ok(None),
-            other => T::from_resp(other).map(Some),
-        }
-    }
-}
 
 #[derive(Clone, PartialEq, Eq)]
 pub enum RespValue {

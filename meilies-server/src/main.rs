@@ -1,7 +1,7 @@
 use std::ops::{Bound::Excluded, Bound::Unbounded};
-use std::time::Instant;
-use std::{env, fmt};
 use std::sync::Arc;
+use std::time::Instant;
+use std::{env, io, fmt};
 
 use futures::future::poll_fn;
 use log::{info, error};
@@ -14,13 +14,15 @@ use tokio::sync::mpsc;
 use meilies::codec::{RespCodec, RespMsgError, RespValue};
 use meilies::command::{Command, CommandError};
 use meilies::stream::{Stream as EsStream, StartReadFrom};
+use meilies::from_resp::{FromResp, RespVecConvertError, RespBytesConvertError};
 use event_id::EventId;
 
 mod event_id;
 
 #[derive(Debug)]
 enum Error<Actual=()> {
-    InvalidRequest(RequestError),
+    RespMsgError(RespMsgError),
+    InvalidRequest,
     InvalidCommand(CommandError),
     CommandFailed(CommandError),
     InternalError(sled::Error<Actual>),
@@ -29,7 +31,8 @@ enum Error<Actual=()> {
 impl fmt::Display for Error {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         match self {
-            Error::InvalidRequest(e) => write!(f, "invalid request; {}", e),
+            Error::RespMsgError(e) => write!(f, "invalid RESP message; {}", e),
+            Error::InvalidRequest => write!(f, "invalid request"),
             Error::InvalidCommand(e) => write!(f, "invalid command; {}", e),
             Error::CommandFailed(e) => write!(f, "command failed; {}", e),
             Error::InternalError(e) => write!(f, "internal error; {}", e),
@@ -43,54 +46,19 @@ impl<A> From<sled::Error<A>> for Error<A> {
     }
 }
 
-#[derive(Debug)]
-enum RequestError {
-    NotAnArrayOfBulkStrings,
-}
-
-impl fmt::Display for RequestError {
-    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-        match self {
-            RequestError::NotAnArrayOfBulkStrings => {
-                write!(f, "requests must be of the type bulk strings array")
-            },
-        }
+impl<Actual> From<RespVecConvertError<RespBytesConvertError>> for Error<Actual> {
+    fn from(_: RespVecConvertError<RespBytesConvertError>) -> Error<Actual> {
+        Error::InvalidRequest
     }
-}
-
-fn resp_into_arguments(value: RespValue) -> Result<Vec<Vec<u8>>, RequestError> {
-    let array = match value {
-        RespValue::Array(array) => array,
-        _ => return Err(RequestError::NotAnArrayOfBulkStrings),
-    };
-
-    let mut args = Vec::with_capacity(array.len());
-
-    for value in array {
-        match value {
-            RespValue::BulkString(buffer) => args.push(buffer),
-            _ => return Err(RequestError::NotAnArrayOfBulkStrings),
-        }
-    }
-
-    Ok(args)
 }
 
 fn send_stream_events(
     stream: EsStream,
     tree: Arc<Tree>,
     mut sender: mpsc::UnboundedSender<RespValue>,
-) {
+) -> sled::Result<(), ()>
+{
     info!("spawning a blocking subscription for {}", stream);
-
-    let subscribed = RespValue::Array(vec![
-        RespValue::SimpleString("subscribed".to_string()),
-        RespValue::Array(vec![RespValue::string(stream.clone())]),
-    ]);
-
-    if sender.start_send(subscribed).is_err() {
-        info!("encountered closed channel");
-    }
 
     let mut watcher = tree.watch_prefix(vec![]);
     let mut event_number = 0;
@@ -112,11 +80,7 @@ fn send_stream_events(
         for result in tree.range(range) {
             has_more_events = true;
 
-            let (key, value) = match result {
-                Ok(key_value) => key_value,
-                Err(e) => return error!("error while iterating on tree; {}", e),
-            };
-
+            let (key, value) = result?;
             last_loop_event_id = Some(key);
 
             let is_accepted = match stream.from {
@@ -169,6 +133,64 @@ fn send_stream_events(
             event_number += 1;
         }
     }
+
+    Ok(())
+}
+
+fn handle_command(
+    command: Command,
+    db: Db,
+    mut sender: mpsc::UnboundedSender<RespValue>
+) -> Result<(), Error>
+{
+    match command {
+        Command::Subscribe { streams } => {
+            for stream in streams {
+                let mut sender = sender.clone();
+                let stream_name = stream.name.clone();
+
+                let tree = db.open_tree(stream_name.into_bytes())?;
+
+                let subscribed = RespValue::Array(vec![
+                    RespValue::string("subscribed"),
+                    RespValue::Array(vec![RespValue::string(stream.clone())]),
+                ]);
+
+                if sender.start_send(subscribed).is_err() {
+                    info!("encountered closed channel");
+                }
+
+                tokio::spawn(poll_fn(move || {
+                    let mut sender = sender.clone();
+                    let stream = stream.clone();
+                    let tree = tree.clone();
+
+                    tokio_threadpool::blocking(move || {
+                        if let Err(e) = send_stream_events(stream, tree, sender.clone()) {
+                            if sender.start_send(RespValue::error(e)).is_err() {
+                                info!("encountered closed channel");
+                            }
+                        }
+                    })
+                    .map_err(|e| error!("error; {}", e))
+                }));
+            }
+        },
+        Command::Publish { stream, event } => {
+            let tree = db.open_tree(stream.into_bytes())?;
+            let event_id = EventId::from(db.generate_id()?);
+
+            if let Err(e) = tree.set(event_id, event) {
+                return Err(Error::InternalError(e))
+            }
+
+            if sender.start_send(RespValue::string("OK")).is_err() {
+                info!("encountered closed channel");
+            }
+        }
+    }
+
+    Ok(())
 }
 
 fn main() {
@@ -201,59 +223,34 @@ fn main() {
             let (writer, reader) = framed.split();
             let (sender, receiver) = mpsc::unbounded_channel();
 
+            let mut error_sender = sender.clone();
+
             let db = db.clone();
-
             let requests = reader
-                .map(move |value| {
-                    let args = match resp_into_arguments(value) {
-                        Ok(args) => args,
-                        Err(e) => return Err(Error::InvalidRequest(e)),
-                    };
+                .map_err(Error::RespMsgError)
+                .and_then(|value| {
 
+                    let args = FromResp::from_resp(value)?;
                     Command::from_args(args).map_err(Error::InvalidCommand)
                 })
-                .for_each(move |msg: Result<Command, Error>| {
-                    match msg {
-                        Ok(Command::Subscribe { streams }) => {
-                            for stream in streams {
-                                let sender = sender.clone();
-                                let stream_name = stream.name.clone();
-                                let tree = db.open_tree(stream_name.into_bytes()).unwrap();
-
-                                tokio::spawn(poll_fn(move || {
-                                    let sender = sender.clone();
-                                    let stream = stream.clone();
-                                    let tree = tree.clone();
-
-                                    tokio_threadpool::blocking(move || {
-                                        send_stream_events(stream, tree, sender)
-                                    })
-                                    .map_err(|e| error!("error; {}", e))
-                                }));
-                            }
-                        },
-                        Ok(Command::Publish { stream, event }) => {
-                            let db = db.clone();
-                            let mut sender = sender.clone();
-
-                            let tree = db.open_tree(stream.into_bytes()).unwrap();
-
-                            let event_id = EventId::from(db.generate_id().unwrap());
-                            tree.set(event_id, event).unwrap();
-
-                            if sender.start_send(RespValue::string("OK")).is_err() {
-                                info!("encountered closed channel");
-                            }
-                        }
-                        Err(e) => error!("error; {}", e),
-                    }
+                .for_each(move |command| {
+                    let db = db.clone();
+                    let mut sender = sender.clone();
+                    handle_command(command, db, sender);
 
                     future::ok(())
                 })
-                .map_err(|e| error!("error; {}", e));
+                .or_else(move |error| {
+                    error!("error; {}", error);
+                    if error_sender.start_send(RespValue::error(error)).is_err() {
+                        info!("encountered closed channel");
+                    }
+
+                    future::ok(())
+                });
 
             let responses = receiver
-                .map_err(|e| RespMsgError::IoError(unimplemented!()))
+                .map_err(|e| RespMsgError::IoError(io::Error::new(io::ErrorKind::BrokenPipe, e)))
                 .forward(writer)
                 .map_err(|e| error!("error; {}", e))
                 .map(|_| ());

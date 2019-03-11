@@ -66,8 +66,9 @@ fn main() {
 
                             future::ok(())
                         })
+                        .map_err(|e| error!("{:?}", e))
                     })
-                    .and_then(|()| {
+                    .and_then(|_| {
                         println!("Connection closed by the server");
                         Err(())
                     })

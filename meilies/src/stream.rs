@@ -1,9 +1,21 @@
 use std::fmt;
 use std::num::ParseIntError;
 use std::str::FromStr;
+use std::string::FromUtf8Error;
+
+use crate::codec::RespValue;
+use crate::from_resp::{FromResp, RespStringConvertError, RespIntConvertError};
 
 #[derive(Debug, Copy, Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub struct EventNumber(pub u64);
+
+impl FromResp for EventNumber {
+    type Error = RespIntConvertError;
+
+    fn from_resp(value: RespValue) -> Result<Self, Self::Error> {
+        i64::from_resp(value).map(|i| EventNumber(i as u64))
+    }
+}
 
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub struct StreamName(String);
@@ -75,15 +87,28 @@ pub struct Stream {
     pub from: StartReadFrom,
 }
 
-impl From<StreamName> for Stream {
-    fn from(name: StreamName) -> Stream {
-        Stream { name, from: StartReadFrom::End }
+#[derive(Debug)]
+pub enum RespStreamConvertError {
+    InvalidRespType,
+    InvalidUtf8String(FromUtf8Error),
+    InnerStreamConvertError(ParseStreamError),
+}
+
+impl FromResp for Stream {
+    type Error = RespStreamConvertError;
+    fn from_resp(value: RespValue) -> Result<Self, Self::Error> {
+        use RespStreamConvertError::*;
+        match String::from_resp(value) {
+            Ok(string) => Stream::from_str(&string).map_err(InnerStreamConvertError),
+            Err(RespStringConvertError::InvalidRespType) => Err(InvalidRespType),
+            Err(RespStringConvertError::InvalidUtf8String(error)) => Err(InvalidUtf8String(error)),
+        }
     }
 }
 
-impl From<(StreamName, StartReadFrom)> for Stream {
-    fn from((name, from): (StreamName, StartReadFrom)) -> Stream {
-        Stream { name, from }
+impl From<StreamName> for Stream {
+    fn from(name: StreamName) -> Stream {
+        Stream { name, from: StartReadFrom::End }
     }
 }
 

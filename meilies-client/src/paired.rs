@@ -1,8 +1,16 @@
+use std::net::SocketAddr;
+use std::io;
+
 use futures::{Future, Stream, Sink};
 use meilies::codec::RespValue;
 use meilies::stream::StreamName;
+use log::error;
 
-use super::RespConnection;
+use super::{connect, RespConnection};
+
+pub fn paired_connect(addr: &SocketAddr) -> impl Future<Item=PairedConnection, Error=io::Error> {
+    connect(&addr).map(PairedConnection::new)
+}
 
 pub struct PairedConnection {
     connection: RespConnection,
@@ -30,7 +38,7 @@ impl PairedConnection {
                         Ok(PairedConnection { connection })
                     },
                     e => {
-                        eprintln!("error: {:?}", e);
+                        error!("error: {:?}", e);
                         return Err(())
                     },
                 }
