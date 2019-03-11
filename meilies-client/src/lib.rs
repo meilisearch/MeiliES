@@ -6,7 +6,7 @@ use futures::stream::{SplitSink, SplitStream};
 use futures::Future;
 use tokio::codec::{Decoder, Framed};
 use tokio::net::TcpStream;
-use meilies::codec::RespCodec;
+use meilies::resp::RespCodec;
 use log::warn;
 
 mod sub;

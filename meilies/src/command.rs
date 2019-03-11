@@ -1,8 +1,7 @@
 use std::str::FromStr;
 use std::{fmt, str, string};
 
-use crate::codec::RespValue;
-use crate::from_resp::FromResp;
+use crate::resp::{RespValue, FromResp};
 use crate::stream::{Stream, StreamName, StreamNameError, ParseStreamError};
 
 pub enum Command {

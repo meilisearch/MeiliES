@@ -2,8 +2,7 @@ use std::net::SocketAddr;
 use std::io;
 
 use futures::{Future, Poll, Async, Stream};
-use meilies::codec::{RespValue, RespMsgError};
-use meilies::from_resp::FromResp;
+use meilies::resp::{RespValue, RespMsgError, FromResp};
 use meilies::stream::{Stream as EsStream, EventNumber};
 use tokio::sync::mpsc;
 use log::error;

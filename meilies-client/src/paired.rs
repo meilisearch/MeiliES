@@ -2,7 +2,7 @@ use std::net::SocketAddr;
 use std::io;
 
 use futures::{Future, Stream, Sink};
-use meilies::codec::RespValue;
+use meilies::resp::RespValue;
 use meilies::stream::StreamName;
 use log::error;
 

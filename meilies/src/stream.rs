@@ -3,8 +3,7 @@ use std::num::ParseIntError;
 use std::str::FromStr;
 use std::string::FromUtf8Error;
 
-use crate::codec::RespValue;
-use crate::from_resp::{FromResp, RespStringConvertError, RespIntConvertError};
+use crate::resp::{RespValue, FromResp, RespStringConvertError, RespIntConvertError};
 
 #[derive(Debug, Copy, Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub struct EventNumber(pub u64);

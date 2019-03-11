@@ -1,5 +1,5 @@
 use std::string::FromUtf8Error;
-use crate::codec::RespValue;
+use super::RespValue;
 
 pub trait FromResp: Sized {
     type Error;
@@ -96,6 +96,17 @@ impl<T: FromResp> FromResp for Option<T> {
         match value {
             RespValue::Nil => Ok(None),
             other => T::from_resp(other).map(Some),
+        }
+    }
+}
+
+impl<T: FromResp> FromResp for Result<T, String> {
+    type Error = T::Error;
+
+    fn from_resp(value: RespValue) -> Result<Self, Self::Error> {
+        match value {
+            RespValue::Error(string) => Ok(Err(string)),
+            other => T::from_resp(other).map(Ok),
         }
     }
 }
