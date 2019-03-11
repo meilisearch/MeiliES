@@ -3,31 +3,12 @@ use std::{fmt, str, string};
 
 use crate::resp::{RespValue, FromResp};
 use crate::stream::{Stream, StreamName, StreamNameError, ParseStreamError};
+use crate::event_data::EventData;
 
+#[derive(Debug)]
 pub enum Command {
-    Publish { stream: StreamName, event: Vec<u8> },
+    Publish { stream: StreamName, event: EventData },
     Subscribe { streams: Vec<Stream> },
-}
-
-impl fmt::Debug for Command {
-    fn fmt(&self, fmt: &mut fmt::Formatter) -> fmt::Result {
-        match self {
-            Command::Publish { stream, event } => {
-                let mut dbg = fmt.debug_struct("Publish");
-                dbg.field("stream", &stream);
-                match str::from_utf8(&event) {
-                    Ok(event) => dbg.field("event", &event),
-                    Err(_) => dbg.field("event", &event),
-                };
-                dbg.finish()
-            },
-            Command::Subscribe { streams } => {
-                fmt.debug_struct("Subscribe")
-                    .field("streams", &streams)
-                    .finish()
-            }
-        }
-    }
 }
 
 impl Into<RespValue> for Command {
@@ -37,7 +18,7 @@ impl Into<RespValue> for Command {
                 RespValue::Array(vec![
                     RespValue::bulk_string(&"publish"[..]),
                     RespValue::bulk_string(stream.into_bytes()),
-                    RespValue::bulk_string(event),
+                    RespValue::bulk_string(event.0),
                 ])
             },
             Command::Subscribe { streams } => {
@@ -125,7 +106,7 @@ impl FromResp for Command {
                     (Some(stream), Some(event), None) => {
                         let text = str::from_utf8(&stream)?;
                         let stream = StreamName::from_str(text)?;
-                        Ok(Command::Publish { stream, event })
+                        Ok(Command::Publish { stream, event: EventData(event) })
                     },
                     _ => Err(InvalidNumberOfArguments { expected: 2 })
                 }

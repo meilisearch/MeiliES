@@ -184,7 +184,7 @@ fn handle_command(
             let tree = db.open_tree(stream.into_bytes())?;
             let event_id = EventId::from(db.generate_id()?);
 
-            if let Err(e) = tree.set(event_id, event) {
+            if let Err(e) = tree.set(event_id, event.0) {
                 return Err(Error::InternalError(e))
             }
 

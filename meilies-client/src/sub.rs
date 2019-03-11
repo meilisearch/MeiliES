@@ -4,6 +4,7 @@ use std::io;
 use futures::{Future, Poll, Async, Stream};
 use meilies::resp::{RespValue, RespMsgError, FromResp};
 use meilies::stream::{Stream as EsStream, EventNumber};
+use meilies::event_data::EventData;
 use tokio::sync::mpsc;
 use log::error;
 
@@ -58,7 +59,7 @@ pub struct SubStream {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Message {
     SubscribedTo(Vec<EsStream>),
-    Event(EsStream, EventNumber, Vec<u8>),
+    Event(EsStream, EventNumber, EventData),
 }
 
 #[derive(Debug)]
@@ -120,7 +121,7 @@ impl Stream for SubStream {
                         None => return Err(MissingMessageElement),
                     };
 
-                    let message = Message::Event(stream, event_number, event);
+                    let message = Message::Event(stream, event_number, EventData(event));
                     Ok(Async::Ready(Some(message)))
                 }
                 else {

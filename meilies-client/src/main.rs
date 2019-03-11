@@ -58,7 +58,7 @@ fn main() {
                             println!("{:?}", msg);
 
                             if let Message::Event(_, _, event) = msg {
-                                if event == b"abonne-toi" {
+                                if event.0 == b"abonne-toi" {
                                     println!("Ok, I'll do it!");
                                     ctrl.subscribe_to(EsStream::from_str("coco").unwrap());
                                 }
