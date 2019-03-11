@@ -2,6 +2,7 @@
 members = [
     "meilies",
     "meilies-client",
+    "meilies-cli",
     "meilies-server",
 ]
 

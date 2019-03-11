@@ -88,10 +88,18 @@ impl FromResp for Command {
     fn from_resp(value: RespValue) -> Result<Self, Self::Error> {
         use RespCommandConvertError::*;
 
-        let mut args = match Vec::<Vec<u8>>::from_resp(value) {
+        let args = match Vec::<Vec<u8>>::from_resp(value) {
             Ok(args) => args,
             Err(e) => return Err(InvalidRespType),
         };
+
+        Command::from_args(args)
+    }
+}
+
+impl Command {
+    pub fn from_args(mut args: Vec<Vec<u8>>) -> Result<Command, RespCommandConvertError> {
+        use RespCommandConvertError::*;
 
         let mut args = args.drain(..);
 
