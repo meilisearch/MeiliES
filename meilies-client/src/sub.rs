@@ -22,8 +22,8 @@ pub fn sub_connect(
             let x = receiver
                 .map_err(|e| RespMsgError::IoError(io::Error::new(io::ErrorKind::BrokenPipe, e)))
                 .forward(writer)
-                .map(|_| ())
-                .map_err(|e| error!("error; {}", e));
+                .map_err(|e| error!("{}", e))
+                .map(|_| ());
 
             tokio::spawn(x);
 
@@ -47,7 +47,7 @@ impl SubController {
         ]);
 
         if let Err(e) = self.sender.try_send(command) {
-            error!("error; {}", e);
+            error!("{}", e);
         }
     }
 }
