@@ -31,15 +31,15 @@ impl PairedConnection {
             .send(command)
             .map_err(|e| eprintln!("error: {:?}", e))
             .and_then(|framed| framed.into_future().map_err(|_| ()))
-            .and_then(|(first_msg, connection)| {
-                match first_msg {
-                    Some(RespValue::SimpleString(ref text)) if text == "OK" => {
+            .and_then(|(first, connection)| {
+                match first {
+                    Some(ref value) if value.is_ok() => {
                         Ok(PairedConnection { connection })
                     },
-                    e => {
-                        error!("error: {:?}", e);
+                    otherwise => {
+                        error!("error: {:?}", otherwise);
                         return Err(())
-                    },
+                    }
                 }
             })
     }

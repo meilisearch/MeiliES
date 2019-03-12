@@ -34,6 +34,13 @@ impl RespValue {
     pub fn bulk_string(string: impl Into<Vec<u8>>) -> RespValue {
         RespValue::BulkString(string.into())
     }
+
+    pub fn is_ok(&self) -> bool {
+        match self {
+            RespValue::SimpleString(text) if text == "OK" => true,
+            _otherwise => false,
+        }
+    }
 }
 
 impl PartialEq<&'_ str> for RespValue {
