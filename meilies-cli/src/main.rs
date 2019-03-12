@@ -42,7 +42,7 @@ fn main() {
 
     let fut = match command {
         Command::Subscribe { streams } => {
-            sub_connect(&addr)
+            let fut = sub_connect(&addr)
                 .map_err(|e| error!("{}", e))
                 .and_then(|(mut ctrl, msgs)| {
 
@@ -59,16 +59,18 @@ fn main() {
                 .and_then(|_| {
                     println!("Connection closed by the server");
                     Err(())
-                })
-                .boxed()
+                });
+
+            Box::new(fut) as Box<dyn Future<Item=(), Error=()> + Send>
         },
         Command::Publish { stream, event } => {
-            paired_connect(&addr)
+            let fut = paired_connect(&addr)
                 .map_err(|e| error!("{}", e))
                 .and_then(|conn| conn.publish(stream, event.0))
                 .and_then(|_conn| future::ok(()))
-                .map(|()| println!("Event sent to the stream"))
-                .boxed()
+                .map(|()| println!("Event sent to the stream"));
+
+            Box::new(fut) as Box<dyn Future<Item=(), Error=()> + Send>
         }
     };
 
