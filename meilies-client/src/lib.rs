@@ -12,7 +12,7 @@ use log::warn;
 mod sub;
 mod paired;
 
-pub use self::sub::{sub_connect, SubStream, SubController, Message, ProtocolError};
+pub use self::sub::{sub_connect, SubStream, SubController, ProtocolError};
 pub use self::paired::{paired_connect, PairedConnection};
 
 pub type RespConnection = Framed<TcpStream, RespCodec>;

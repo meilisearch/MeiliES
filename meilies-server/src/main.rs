@@ -12,7 +12,8 @@ use tokio::prelude::*;
 use tokio::sync::mpsc;
 
 use meilies::command::{Command, RespCommandConvertError};
-use meilies::stream::{Stream as EsStream, StartReadFrom};
+use meilies::stream::{Message, EventNumber, Stream as EsStream, StartReadFrom};
+use meilies::event_data::EventData;
 use event_id::EventId;
 use meilies::resp::{
     RespCodec,
@@ -93,15 +94,11 @@ fn send_stream_events(
             };
 
             if is_accepted {
-                let response = RespValue::Array(vec![
-                    RespValue::string("event"),
-                    RespValue::string(stream.clone()),
-                    RespValue::Integer(event_number as i64),
-                    RespValue::bulk_string(value.to_vec()),
-                ]);
+                let event = Message::Event(stream.clone(), EventNumber(event_number), EventData(value.to_vec()));
+                let event = event.into();
 
                 // the only possible error is a closed channel
-                if sender.start_send(response).is_err() {
+                if sender.start_send(event).is_err() {
                     info!("encountered closed channel");
                     break
                 }
@@ -120,15 +117,11 @@ fn send_stream_events(
             };
 
             if is_accepted {
-                let response = RespValue::Array(vec![
-                    RespValue::string("event"),
-                    RespValue::string(stream.clone()),
-                    RespValue::Integer(event_number as i64),
-                    RespValue::bulk_string(value),
-                ]);
+                let event = Message::Event(stream.clone(), EventNumber(event_number), EventData(value));
+                let event = event.into();
 
                 // the only possible error is a closed channel
-                if sender.start_send(response).is_err() {
+                if sender.start_send(event).is_err() {
                     info!("encountered closed channel");
                     break
                 }
@@ -155,10 +148,8 @@ fn handle_command(
 
                 let tree = db.open_tree(stream_name.into_bytes())?;
 
-                let subscribed = RespValue::Array(vec![
-                    RespValue::string("subscribed"),
-                    RespValue::Array(vec![RespValue::string(stream.clone())]),
-                ]);
+                let subscribed = Message::SubscribedTo(vec![stream.clone()]);
+                let subscribed = subscribed.into();
 
                 if sender.start_send(subscribed).is_err() {
                     info!("encountered closed channel");

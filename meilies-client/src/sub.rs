@@ -3,8 +3,7 @@ use std::io;
 
 use futures::{Future, Poll, Async, Stream};
 use meilies::resp::{RespValue, RespMsgError, FromResp};
-use meilies::stream::{Stream as EsStream, EventNumber};
-use meilies::event_data::EventData;
+use meilies::stream::{Message, RespMessageConvertError, Stream as EsStream};
 use tokio::sync::mpsc;
 use log::error;
 
@@ -54,62 +53,6 @@ impl SubController {
 
 pub struct SubStream {
     connection: RespConnectionReader,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub enum Message {
-    SubscribedTo(Vec<EsStream>),
-    Event(EsStream, EventNumber, EventData),
-}
-
-#[derive(Debug)]
-pub enum RespMessageConvertError {
-    InvalidMessageType(String),
-    InvalidRespValue(String),
-    MissingMessageElement,
-}
-
-impl FromResp for Message {
-    type Error = RespMessageConvertError;
-
-    fn from_resp(value: RespValue) -> Result<Self, Self::Error> {
-        use RespMessageConvertError::*;
-
-        let mut args = match Vec::<RespValue>::from_resp(value) {
-            Ok(args) => args.into_iter(),
-            Err(e) => return Err(InvalidRespValue(format!("invalid type found, expected Array"))),
-        };
-
-        let value = args.next().ok_or(MissingMessageElement)?;
-        let message_type = String::from_resp(value)
-            .map_err(|e| InvalidRespValue(e.to_string()))?;
-
-        match message_type.as_str() {
-            "subscribed" => {
-                let value = args.next().ok_or(MissingMessageElement)?;
-                let streams = Vec::<EsStream>::from_resp(value)
-                    .map_err(|e| InvalidRespValue(e.to_string()))?;
-
-                Ok(Message::SubscribedTo(streams))
-            },
-            "event" => {
-                let value = args.next().ok_or(MissingMessageElement)?;
-                let stream = EsStream::from_resp(value)
-                    .map_err(|e| InvalidRespValue(e.to_string()))?;
-
-                let value = args.next().ok_or(MissingMessageElement)?;
-                let event_number = EventNumber::from_resp(value)
-                    .map_err(|e| InvalidRespValue(e.to_string()))?;
-
-                let value = args.next().ok_or(MissingMessageElement)?;
-                let event = Vec::<u8>::from_resp(value)
-                    .map_err(|e| InvalidRespValue(e.to_string()))?;
-
-                Ok(Message::Event(stream, event_number, EventData(event)))
-            },
-            _unknown => Err(InvalidMessageType(message_type)),
-        }
-    }
 }
 
 #[derive(Debug)]
