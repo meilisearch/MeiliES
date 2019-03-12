@@ -1,4 +1,5 @@
 use std::string::FromUtf8Error;
+use std::fmt;
 use super::RespValue;
 
 pub trait FromResp: Sized {
@@ -20,6 +21,18 @@ pub enum RespStringConvertError {
     InvalidUtf8String(FromUtf8Error),
 }
 
+impl fmt::Display for RespStringConvertError {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        use RespStringConvertError::*;
+        match self {
+            InvalidRespType => {
+                write!(f, "invalid RESP type found, expected String, Error or BulkString")
+            },
+            InvalidUtf8String(e) => write!(f, "invalid UTF8 string; {}", e),
+        }
+    }
+}
+
 impl FromResp for String {
     type Error = RespStringConvertError;
 
@@ -39,6 +52,16 @@ pub enum RespIntConvertError {
     InvalidRespType,
 }
 
+impl fmt::Display for RespIntConvertError {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        match self {
+            RespIntConvertError::InvalidRespType => {
+                write!(f, "invalid RESP type found, expected Integer")
+            },
+        }
+    }
+}
+
 impl FromResp for i64 {
     type Error = RespIntConvertError;
 
@@ -53,6 +76,16 @@ impl FromResp for i64 {
 #[derive(Debug)]
 pub enum RespBytesConvertError {
     InvalidRespType,
+}
+
+impl fmt::Display for RespBytesConvertError {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        match self {
+            RespBytesConvertError::InvalidRespType => {
+                write!(f, "invalid RESP type found, expected String, Error or BulkString")
+            },
+        }
+    }
 }
 
 impl FromResp for Vec<u8> {
@@ -72,6 +105,20 @@ impl FromResp for Vec<u8> {
 pub enum RespVecConvertError<E> {
     InvalidRespType,
     InnerRespConvertError(E),
+}
+
+impl<E: fmt::Display> fmt::Display for RespVecConvertError<E> {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        use RespVecConvertError::*;
+        match self {
+            InvalidRespType => {
+                write!(f, "invalid RESP type found, expected Array")
+            },
+            InnerRespConvertError(e) => {
+                write!(f, "inner RESP type convertion error: {}", e)
+            },
+        }
+    }
 }
 
 impl<T: FromResp> FromResp for Vec<T> {

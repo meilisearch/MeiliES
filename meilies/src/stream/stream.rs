@@ -40,6 +40,17 @@ pub enum RespStreamConvertError {
     InnerStreamConvertError(ParseStreamError),
 }
 
+impl fmt::Display for RespStreamConvertError {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        use RespStreamConvertError::*;
+        match self {
+            InvalidRespType => write!(f, "invalid RESP type found, expected String"),
+            InvalidUtf8String(e) => write!(f, "invalid UTF8 string; {}", e),
+            InnerStreamConvertError(e) => write!(f, "inner Stream convert error: {}", e),
+        }
+    }
+}
+
 impl FromResp for Stream {
     type Error = RespStreamConvertError;
     fn from_resp(value: RespValue) -> Result<Self, Self::Error> {
