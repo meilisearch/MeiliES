@@ -80,43 +80,30 @@ impl FromResp for Message {
             Err(e) => return Err(InvalidRespValue(format!("invalid type found, expected Array"))),
         };
 
-        let message_type = match args.next() {
-            Some(val) => String::from_resp(val).map_err(|e| InvalidRespValue(e.to_string()))?,
-            None => return Err(MissingMessageElement),
-        };
+        let value = args.next().ok_or(MissingMessageElement)?;
+        let message_type = String::from_resp(value)
+            .map_err(|e| InvalidRespValue(e.to_string()))?;
 
         match message_type.as_str() {
             "subscribed" => {
-                let streams = match args.next() {
-                    Some(val) => {
-                        Vec::<EsStream>::from_resp(val).map_err(|e| InvalidRespValue(e.to_string()))?
-                    },
-                    None => return Err(MissingMessageElement),
-                };
+                let value = args.next().ok_or(MissingMessageElement)?;
+                let streams = Vec::<EsStream>::from_resp(value)
+                    .map_err(|e| InvalidRespValue(e.to_string()))?;
 
                 Ok(Message::SubscribedTo(streams))
             },
             "event" => {
-                let stream = match args.next() {
-                    Some(val) => {
-                        EsStream::from_resp(val).map_err(|e| InvalidRespValue(e.to_string()))?
-                    },
-                    None => return Err(MissingMessageElement),
-                };
+                let value = args.next().ok_or(MissingMessageElement)?;
+                let stream = EsStream::from_resp(value)
+                    .map_err(|e| InvalidRespValue(e.to_string()))?;
 
-                let event_number = match args.next() {
-                    Some(val) => {
-                        EventNumber::from_resp(val).map_err(|e| InvalidRespValue(e.to_string()))?
-                    },
-                    None => return Err(MissingMessageElement),
-                };
+                let value = args.next().ok_or(MissingMessageElement)?;
+                let event_number = EventNumber::from_resp(value)
+                    .map_err(|e| InvalidRespValue(e.to_string()))?;
 
-                let event = match args.next() {
-                    Some(val) => {
-                        Vec::<u8>::from_resp(val).map_err(|e| InvalidRespValue(e.to_string()))?
-                    },
-                    None => return Err(MissingMessageElement),
-                };
+                let value = args.next().ok_or(MissingMessageElement)?;
+                let event = Vec::<u8>::from_resp(value)
+                    .map_err(|e| InvalidRespValue(e.to_string()))?;
 
                 Ok(Message::Event(stream, event_number, EventData(event)))
             },
