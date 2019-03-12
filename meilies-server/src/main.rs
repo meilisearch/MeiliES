@@ -252,7 +252,14 @@ fn main() {
             let responses = receiver
                 .map_err(|e| RespMsgError::IoError(io::Error::new(io::ErrorKind::BrokenPipe, e)))
                 .forward(writer)
-                .map_err(|e| error!("error; {}", e))
+                .map_err(|error| {
+                    match error {
+                        RespMsgError::IoError(ref e) if e.kind() == io::ErrorKind::BrokenPipe => {
+                            info!("{}", e);
+                        },
+                        other => error!("{}", other),
+                    }
+                })
                 .map(|_| ());
 
             tokio::spawn(requests);
