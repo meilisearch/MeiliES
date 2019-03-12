@@ -12,8 +12,7 @@ use tokio::prelude::*;
 use tokio::sync::mpsc;
 
 use meilies::command::{Command, RespCommandConvertError};
-use meilies::stream::{Message, EventNumber, Stream as EsStream, StartReadFrom};
-use meilies::event_data::EventData;
+use meilies::stream::{Message, EventData, EventNumber, Stream as EsStream, StartReadFrom};
 use event_id::EventId;
 use meilies::resp::{
     RespCodec,

@@ -2,8 +2,7 @@ use std::str::FromStr;
 use std::{fmt, str, string};
 
 use crate::resp::{RespValue, FromResp};
-use crate::stream::{Stream, StreamName, StreamNameError, ParseStreamError};
-use crate::event_data::EventData;
+use crate::stream::{Stream, EventData, StreamName, StreamNameError, ParseStreamError};
 
 #[derive(Debug)]
 pub enum Command {
