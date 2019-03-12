@@ -20,9 +20,15 @@ pub struct Stream {
 
 impl fmt::Debug for Stream {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        write!(f, "Stream(\"{}\")", self)
+    }
+}
+
+impl fmt::Display for Stream {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         match self.from {
-            StartReadFrom::EventNumber(number) => write!(f, "\"{}:{}\"", self.name, number),
-            StartReadFrom::End => write!(f, "\"{}\"", self.name),
+            StartReadFrom::EventNumber(number) => write!(f, "{}:{}", self.name, number),
+            StartReadFrom::End => write!(f, "{}", self.name),
         }
     }
 }
@@ -70,15 +76,6 @@ impl FromStr for Stream {
                 Ok(Stream { name, from: StartReadFrom::EventNumber(number) })
             },
             (_, _, _) => Err(FormatError),
-        }
-    }
-}
-
-impl fmt::Display for Stream {
-    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-        match self.from {
-            StartReadFrom::EventNumber(number) => write!(f, "{}:{}", self.name, number),
-            StartReadFrom::End => write!(f, "{}", self.name),
         }
     }
 }
