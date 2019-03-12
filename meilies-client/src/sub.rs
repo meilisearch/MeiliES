@@ -2,8 +2,9 @@ use std::net::SocketAddr;
 use std::io;
 
 use futures::{Future, Poll, Async, Stream};
-use meilies::resp::{RespValue, RespMsgError, FromResp};
+use meilies::resp::{RespMsgError, FromResp};
 use meilies::stream::{Message, RespMessageConvertError, Stream as EsStream};
+use meilies::command::Command;
 use tokio::sync::mpsc;
 use log::error;
 
@@ -20,6 +21,7 @@ pub fn sub_connect(
 
             let x = receiver
                 .map_err(|e| RespMsgError::IoError(io::Error::new(io::ErrorKind::BrokenPipe, e)))
+                .map(Into::into)
                 .forward(writer)
                 .map_err(|e| error!("{}", e))
                 .map(|_| ());
@@ -35,15 +37,12 @@ pub fn sub_connect(
 
 #[derive(Clone)]
 pub struct SubController {
-    sender: mpsc::UnboundedSender<RespValue>,
+    sender: mpsc::UnboundedSender<Command>,
 }
 
 impl SubController {
     pub fn subscribe_to(&mut self, stream: EsStream) {
-        let command = RespValue::Array(vec![
-            RespValue::bulk_string("subscribe"),
-            RespValue::bulk_string(stream.to_string()),
-        ]);
+        let command = Command::Subscribe { streams: vec![stream] };
 
         if let Err(e) = self.sender.try_send(command) {
             error!("{}", e);

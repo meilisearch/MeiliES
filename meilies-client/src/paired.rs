@@ -3,7 +3,8 @@ use std::io;
 
 use futures::{Future, Stream, Sink};
 use meilies::resp::RespValue;
-use meilies::stream::StreamName;
+use meilies::stream::{StreamName, EventData};
+use meilies::command::Command;
 use log::error;
 
 use super::{connect, RespConnection};
@@ -22,11 +23,9 @@ impl PairedConnection {
     }
 
     pub fn publish(self, stream: StreamName, event: Vec<u8>) -> impl Future<Item=PairedConnection, Error=()> {
-        let command = RespValue::Array(vec![
-            RespValue::bulk_string("publish"),
-            RespValue::bulk_string(stream.to_string()),
-            RespValue::bulk_string(event),
-        ]);
+        let event = EventData(event);
+        let command = Command::Publish { stream, event };
+        let command = command.into();
 
         self.connection
             .send(command)
