@@ -89,7 +89,7 @@ impl FromResp for Command {
 
         let args = match Vec::<Vec<u8>>::from_resp(value) {
             Ok(args) => args,
-            Err(e) => return Err(InvalidRespType),
+            Err(_) => return Err(InvalidRespType),
         };
 
         Command::from_args(args)

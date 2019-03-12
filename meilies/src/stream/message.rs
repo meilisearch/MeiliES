@@ -22,7 +22,7 @@ impl FromResp for Message {
 
         let mut args = match Vec::<RespValue>::from_resp(value) {
             Ok(args) => args.into_iter(),
-            Err(e) => return Err(InvalidRespValue(format!("invalid type found, expected Array"))),
+            Err(_) => return Err(InvalidRespValue(format!("invalid type found, expected Array"))),
         };
 
         let value = args.next().ok_or(MissingMessageElement)?;

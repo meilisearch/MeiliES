@@ -183,7 +183,7 @@ fn decode_message(buf: &[u8]) -> Result<Option<(RespValue, usize)>, RespMsgError
     }
 }
 
-#[derive(Default)]
+#[derive(Debug, Default)]
 pub struct RespCodec;
 
 impl Decoder for RespCodec {
