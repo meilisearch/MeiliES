@@ -63,15 +63,68 @@ pub enum Message {
 }
 
 #[derive(Debug)]
-pub enum ProtocolError {
-    RespMsgError(RespMsgError),
-    RespConvertError,
-    InvalidMessageType(RespValue),
+pub enum RespMessageConvertError {
+    InvalidMessageType(String),
+    InvalidRespValue,
     MissingMessageElement,
 }
 
+impl FromResp for Message {
+    type Error = RespMessageConvertError;
+
+    fn from_resp(value: RespValue) -> Result<Self, Self::Error> {
+        use RespMessageConvertError::*;
+
+        let mut args = match Vec::<RespValue>::from_resp(value) {
+            Ok(args) => args.into_iter(),
+            Err(e) => return Err(InvalidRespValue),
+        };
+
+        let message_type: String = match args.next() {
+            Some(val) => FromResp::from_resp(val).map_err(|e| InvalidRespValue)?,
+            None => return Err(MissingMessageElement),
+        };
+
+        match message_type.as_str() {
+            "subscribed" => {
+                let streams: Vec<EsStream> = match args.next() {
+                    Some(val) => FromResp::from_resp(val).map_err(|e| InvalidRespValue)?,
+                    None => return Err(MissingMessageElement),
+                };
+
+                Ok(Message::SubscribedTo(streams))
+            },
+            "event" => {
+                let stream: EsStream = match args.next() {
+                    Some(val) => FromResp::from_resp(val).map_err(|e| InvalidRespValue)?,
+                    None => return Err(MissingMessageElement),
+                };
+
+                let event_number: EventNumber = match args.next() {
+                    Some(val) => FromResp::from_resp(val).map_err(|e| InvalidRespValue)?,
+                    None => return Err(MissingMessageElement),
+                };
+
+                let event: Vec<u8> = match args.next() {
+                    Some(val) => FromResp::from_resp(val).map_err(|e| InvalidRespValue)?,
+                    None => return Err(MissingMessageElement),
+                };
+
+                Ok(Message::Event(stream, event_number, EventData(event)))
+            },
+            _unknown => Err(InvalidMessageType(message_type)),
+        }
+    }
+}
+
+#[derive(Debug)]
+pub enum ProtocolError {
+    RespMsgError(RespMsgError),
+    RespConvertError(RespMessageConvertError),
+}
+
 impl Stream for SubStream {
-    type Item = Message;
+    type Item = Result<Message, String>;
     type Error = ProtocolError;
 
     fn poll(&mut self) -> Poll<Option<Self::Item>, Self::Error> {
@@ -81,51 +134,13 @@ impl Stream for SubStream {
             .poll()
             .map_err(RespMsgError)
             .and_then(|async_| {
-                let array: Vec<RespValue> = match async_ {
-                    Async::Ready(Some(value)) => {
-                        FromResp::from_resp(value).map_err(|_| RespConvertError)?
+                match async_ {
+                    Async::Ready(Some(v)) => {
+                        let message = FromResp::from_resp(v).map_err(RespConvertError)?;
+                        Ok(Async::Ready(message))
                     },
                     Async::Ready(None) => return Ok(Async::Ready(None)),
                     Async::NotReady => return Ok(Async::NotReady),
-                };
-
-                let mut iter = array.into_iter();
-
-                let type_ = match iter.next() {
-                    Some(type_) => type_,
-                    None => return Err(MissingMessageElement),
-                };
-
-                if type_ == "subscribed" {
-                    let streams: Vec<EsStream> = match iter.next() {
-                        Some(val) => FromResp::from_resp(val).map_err(|_| RespConvertError)?,
-                        None => return Err(MissingMessageElement),
-                    };
-
-                    let message = Message::SubscribedTo(streams);
-                    Ok(Async::Ready(Some(message)))
-                }
-                else if type_ == "event" {
-                    let stream: EsStream = match iter.next() {
-                        Some(value) => FromResp::from_resp(value).map_err(|_| RespConvertError)?,
-                        None => return Err(MissingMessageElement),
-                    };
-
-                    let event_number: EventNumber = match iter.next() {
-                        Some(val) => FromResp::from_resp(val).map_err(|_| RespConvertError)?,
-                        None => return Err(MissingMessageElement),
-                    };
-
-                    let event: Vec<u8> = match iter.next() {
-                        Some(value) => FromResp::from_resp(value).map_err(|_| RespConvertError)?,
-                        None => return Err(MissingMessageElement),
-                    };
-
-                    let message = Message::Event(stream, event_number, EventData(event));
-                    Ok(Async::Ready(Some(message)))
-                }
-                else {
-                    Err(InvalidMessageType(type_))
                 }
             })
     }

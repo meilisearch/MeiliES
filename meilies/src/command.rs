@@ -98,10 +98,10 @@ impl FromResp for Command {
 }
 
 impl Command {
-    pub fn from_args(mut args: Vec<Vec<u8>>) -> Result<Command, RespCommandConvertError> {
+    pub fn from_args(args: Vec<Vec<u8>>) -> Result<Command, RespCommandConvertError> {
         use RespCommandConvertError::*;
 
-        let mut args = args.drain(..);
+        let mut args = args.into_iter();
 
         let command = match args.next() {
             Some(command) => str::from_utf8(&command)?.to_lowercase(),
