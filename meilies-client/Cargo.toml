@@ -9,3 +9,4 @@ futures = "0.1.25"
 log = "0.4.6"
 meilies = { version = "0.1", path = "../meilies" }
 tokio = "0.1.16"
+tokio-retry = "0.2.0"

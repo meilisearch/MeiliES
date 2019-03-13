@@ -42,7 +42,7 @@ fn main() {
 
     let fut = match command {
         Command::Subscribe { streams } => {
-            let fut = sub_connect(&addr)
+            let fut = sub_connect(addr)
                 .map_err(|e| error!("{}", e))
                 .and_then(|(mut ctrl, msgs)| {
 
