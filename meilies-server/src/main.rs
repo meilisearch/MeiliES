@@ -93,7 +93,7 @@ fn send_stream_events(
             };
 
             if is_accepted {
-                let event = Message::Event(stream.clone(), EventNumber(event_number), EventData(value.to_vec()));
+                let event = Message::Event(stream.name.clone(), EventNumber(event_number), EventData(value.to_vec()));
                 let event = event.into();
 
                 // the only possible error is a closed channel
@@ -116,7 +116,7 @@ fn send_stream_events(
             };
 
             if is_accepted {
-                let event = Message::Event(stream.clone(), EventNumber(event_number), EventData(value));
+                let event = Message::Event(stream.name.clone(), EventNumber(event_number), EventData(value));
                 let event = event.into();
 
                 // the only possible error is a closed channel
@@ -143,11 +143,11 @@ fn handle_command(
         Command::Subscribe { streams } => {
             for stream in streams {
                 let mut sender = sender.clone();
-                let stream_name = stream.name.clone();
 
-                let tree = db.open_tree(stream_name.into_bytes())?;
+                let tree = db.open_tree(stream.name.clone().into_bytes())?;
 
-                let subscribed = Message::SubscribedTo(vec![stream.clone()]);
+                let streams = vec![stream.name.clone()];
+                let subscribed = Message::SubscribedTo { streams };
                 let subscribed = subscribed.into();
 
                 if sender.start_send(subscribed).is_err() {
