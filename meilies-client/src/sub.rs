@@ -20,7 +20,7 @@ use super::{connect, RespConnection, RespConnectionReader};
 
 enum Connection {
     Connected(RespConnection),
-    Connecting(Box<Future<Item=TcpStream, Error=io::Error> + Send>),
+    Connecting(Box<Future<Item=RespConnection, Error=io::Error> + Send>),
 }
 
 fn retry_strategy() -> std::iter::Take<FibonacciBackoff> {
@@ -82,7 +82,7 @@ impl Stream for EventStream {
                         let addr = self.addr;
                         let retry = Retry::spawn(retry_strategy(), move || {
                                 warn!("Trying to reconnect to {}...", addr);
-                                TcpStream::connect(&addr)
+                                TcpStream::connect(&addr).map(|conn| Framed::new(conn, RespCodec))
                             })
                             .map_err(|error| match error {
                                 TrError::OperationError(e) => e,
@@ -98,8 +98,8 @@ impl Stream for EventStream {
             },
             Connection::Connecting(connect) => {
                 match connect.poll() {
-                    Ok(Async::Ready(conn)) => {
-                        self.connection = Connection::Connected(Framed::new(conn, RespCodec));
+                    Ok(Async::Ready(connection)) => {
+                        self.connection = Connection::Connected(connection);
 
                         // Now that a new connection have been successfully established
                         // we can re-send our subscriptions with the appropriate event number,
@@ -141,8 +141,8 @@ impl Sink for EventStream {
             Connection::Connected(connection) => connection.start_send(item), // TODO check if that can be done
             Connection::Connecting(connect) => {
                 match connect.poll() {
-                    Ok(Async::Ready(conn)) => {
-                        self.connection = Connection::Connected(Framed::new(conn, RespCodec));
+                    Ok(Async::Ready(connection)) => {
+                        self.connection = Connection::Connected(connection);
                         self.start_send(item)
                     },
                     Ok(Async::NotReady) => Ok(AsyncSink::NotReady(item)),
@@ -157,8 +157,8 @@ impl Sink for EventStream {
             Connection::Connected(connection) => connection.poll_complete(), // TODO check if that can be done
             Connection::Connecting(connect) => {
                 match connect.poll() {
-                    Ok(Async::Ready(conn)) => {
-                        self.connection = Connection::Connected(Framed::new(conn, RespCodec));
+                    Ok(Async::Ready(connection)) => {
+                        self.connection = Connection::Connected(connection);
                         self.poll_complete()
                     },
                     Ok(Async::NotReady) => Ok(Async::NotReady),
