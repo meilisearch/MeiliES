@@ -1,9 +1,9 @@
 use std::collections::HashMap;
 use std::net::SocketAddr;
-use std::io;
+use std::{io, mem};
 
 use futures::{future, Future, Poll, Async, AsyncSink, Stream, Sink};
-use log::{error, warn};
+use log::{error, warn, info};
 use meilies::command::Command;
 use meilies::resp::{RespCodec, RespValue, RespMsgError, FromResp};
 use meilies::stream::{
@@ -13,40 +13,177 @@ use tokio::net::{TcpStream, ConnectFuture};
 use tokio::sync::mpsc;
 use tokio::codec::Framed;
 use futures::stream::SplitStream;
-use tokio_retry::{Retry, strategy::FibonacciBackoff};
+use tokio_retry::{RetryIf, strategy::FibonacciBackoff};
 use tokio_retry::Error as TrError;
 
 use super::{connect, RespConnection, RespConnectionReader};
 
-enum Connection {
+pub struct SteelConnection {
+    addr: SocketAddr,
+    reconnected: bool,
+    conn_state: ConnState,
+}
+
+enum ConnState {
     Connected(RespConnection),
     Connecting(Box<Future<Item=RespConnection, Error=io::Error> + Send>),
+}
+
+impl SteelConnection {
+    pub fn new(addr: SocketAddr, connection: RespConnection) -> SteelConnection {
+        SteelConnection { addr, reconnected: false, conn_state: ConnState::Connected(connection) }
+    }
+
+    /// Returns `true` if the connection has been reconnected since the last time called.
+    pub fn has_been_reconnected(&mut self) -> bool {
+        mem::replace(&mut self.reconnected, false)
+    }
 }
 
 fn retry_strategy() -> std::iter::Take<FibonacciBackoff> {
     FibonacciBackoff::from_millis(100).take(50)
 }
 
+fn must_retry(e: &io::Error) -> bool {
+    use io::ErrorKind::*;
+    e.kind() == BrokenPipe || e.kind() == ConnectionRefused
+}
+
+fn retry_future(addr: SocketAddr) -> Box<Future<Item=RespConnection, Error=io::Error> + Send> {
+    let retry = RetryIf::spawn(retry_strategy(), move || {
+            warn!("Reconnecting to {}", addr);
+            connect(&addr)
+        }, must_retry)
+        .map_err(|error| match error {
+            TrError::OperationError(e) => e,
+            TrError::TimerError(e) => io::Error::new(io::ErrorKind::Other, e),
+        });
+
+    Box::new(retry)
+}
+
+impl Stream for SteelConnection {
+    type Item = RespValue;
+    type Error = RespMsgError;
+
+    fn poll(&mut self) -> Result<Async<Option<Self::Item>>, Self::Error> {
+        match &mut self.conn_state {
+            ConnState::Connected(connection) => {
+                match connection.poll() {
+                    Ok(Async::Ready(Some(item))) => Ok(Async::Ready(Some(item))),
+                    Ok(Async::Ready(None)) => {
+                        error!("Connection closed with {}", self.addr);
+                        self.conn_state = ConnState::Connecting(retry_future(self.addr));
+                        self.poll()
+                    },
+                    Ok(Async::NotReady) => Ok(Async::NotReady),
+                    Err(error) => {
+                        match error {
+                            RespMsgError::IoError(ref e) if must_retry(e) => {
+                                self.conn_state = ConnState::Connecting(retry_future(self.addr));
+                                self.poll()
+                            },
+                            otherwise => Err(otherwise),
+                        }
+                    },
+                }
+            },
+            ConnState::Connecting(connect) => {
+                match connect.poll() {
+                    Ok(Async::Ready(connection)) => {
+                        info!("Successfully reconnected to {}", self.addr);
+                        self.reconnected = true;
+                        self.conn_state = ConnState::Connected(connection);
+                        self.poll()
+                    },
+                    Ok(Async::NotReady) => Ok(Async::NotReady),
+                    Err(error) => Err(error.into()),
+                }
+            },
+        }
+    }
+}
+
+impl Sink for SteelConnection {
+    type SinkItem = RespValue;
+    type SinkError = RespMsgError;
+
+    fn start_send(&mut self, item: Self::SinkItem) -> Result<AsyncSink<Self::SinkItem>, Self::SinkError> {
+        match &mut self.conn_state {
+            ConnState::Connected(connection) => {
+                connection.start_send(item) // TODO check if that can be done
+                // unimplemented!()
+            },
+            ConnState::Connecting(connect) => {
+                match connect.poll() {
+                    Ok(Async::Ready(connection)) => {
+                        info!("Successfully reconnected to {}", self.addr);
+                        self.reconnected = true;
+                        self.conn_state = ConnState::Connected(connection);
+                        self.start_send(item)
+                    },
+                    Ok(Async::NotReady) => Ok(AsyncSink::NotReady(item)),
+                    Err(error) => Err(error.into()),
+                }
+            },
+        }
+    }
+
+    fn poll_complete(&mut self) -> Result<Async<()>, Self::SinkError> {
+        match &mut self.conn_state {
+            ConnState::Connected(connection) => {
+                connection.poll_complete() // TODO check if that can be done
+                // unimplemented!()
+            },
+            ConnState::Connecting(connect) => {
+                match connect.poll() {
+                    Ok(Async::Ready(connection)) => {
+                        info!("Successfully reconnected to {}", self.addr);
+                        self.reconnected = true;
+                        self.conn_state = ConnState::Connected(connection);
+                        self.poll_complete()
+                    },
+                    Ok(Async::NotReady) => Ok(Async::NotReady),
+                    Err(error) => Err(error.into()),
+                }
+            },
+        }
+    }
+}
+
 pub struct EventStream {
     state: HashMap<StreamName, Option<u64>>,
-    addr: SocketAddr,
-    connection: Connection,
+    connection: SteelConnection,
 }
 
 impl EventStream {
     fn connect(addr: SocketAddr) -> impl Future<Item=EventStream, Error=tokio_retry::Error<io::Error>> {
-        Retry::spawn(retry_strategy(), move || {
-            warn!("Trying to connect to {}...", addr);
-
+        RetryIf::spawn(retry_strategy(), move || {
+            warn!("Connecting to {}", addr);
             connect(&addr)
                 .map(move |connection| {
-                    EventStream {
-                        state: HashMap::new(),
-                        addr: addr,
-                        connection: Connection::Connected(connection),
-                    }
+                    let connection = SteelConnection::new(addr, connection);
+                    EventStream { state: HashMap::new(), connection }
                 })
-        })
+        }, must_retry)
+    }
+
+    fn send_stream_subscriptions(&mut self) -> Result<(), RespMsgError> {
+        // Now that a new connection has been successfully established
+        // we can re-send our subscriptions with the appropriate event number.
+
+        let mut streams = Vec::with_capacity(self.state.len());
+
+        for (name, &from) in &self.state {
+            let stream = EsStream { name: name.clone(), from: from.into() };
+            streams.push(stream);
+        }
+
+        let subscription = Command::Subscribe { streams };
+        self.start_send(subscription.into())?;
+        self.poll_complete()?;
+
+        Ok(())
     }
 }
 
@@ -55,74 +192,32 @@ impl Stream for EventStream {
     type Error = RespMsgError;
 
     fn poll(&mut self) -> Result<Async<Option<Self::Item>>, Self::Error> {
-        match &mut self.connection {
-            Connection::Connected(connection) => {
-                match connection.poll() {
-                    Ok(Async::Ready(Some(item))) => {
-
-                        match FromResp::from_resp(item.clone()) {
-                            Ok(Message::Event(stream_name, number, _)) => {
-                                self.state.insert(stream_name, Some(number.0 + 1));
-                            },
-                            Ok(Message::SubscribedTo { streams }) => {
-                                // if we were already subscribed to a stream and we are reconnecting
-                                // we do not return the message validating a subscription to the user
-                                if self.state.contains_key(&streams[0]) {
-                                    return self.poll();
-                                }
-                            },
-                            _otherwise => (),
+        let result = match self.connection.poll() {
+            Ok(Async::Ready(Some(item))) => {
+                match FromResp::from_resp(item.clone()) {
+                    Ok(Message::Event(stream_name, number, _)) => {
+                        self.state.insert(stream_name, Some(number.0 + 1));
+                    },
+                    Ok(Message::SubscribedTo { streams }) => {
+                        // if we were already subscribed to a stream and we are reconnecting
+                        // we do not return the message validating a subscription to the user
+                        if self.state.contains_key(&streams[0]) {
+                            return self.poll();
                         }
-
-                        Ok(Async::Ready(Some(item)))
                     },
-                    Ok(Async::Ready(None)) => {
-                        error!("Connection closed");
-
-                        let addr = self.addr;
-                        let retry = Retry::spawn(retry_strategy(), move || {
-                                warn!("Trying to reconnect to {}...", addr);
-                                TcpStream::connect(&addr).map(|conn| Framed::new(conn, RespCodec))
-                            })
-                            .map_err(|error| match error {
-                                TrError::OperationError(e) => e,
-                                TrError::TimerError(e) => io::Error::new(io::ErrorKind::Other, e),
-                            });
-
-                        self.connection = Connection::Connecting(Box::new(retry));
-                        self.poll()
-                    },
-                    Err(error) => Err(error),
-                    otherwise => otherwise,
+                    _otherwise => (),
                 }
+
+                Ok(Async::Ready(Some(item)))
             },
-            Connection::Connecting(connect) => {
-                match connect.poll() {
-                    Ok(Async::Ready(connection)) => {
-                        self.connection = Connection::Connected(connection);
+            otherwise => otherwise,
+        };
 
-                        // Now that a new connection have been successfully established
-                        // we can re-send our subscriptions with the appropriate event number,
-                        // this means the event number just after the last event number we received.
-
-                        let mut streams = Vec::with_capacity(self.state.len());
-
-                        for (name, &from) in &self.state {
-                            let stream = EsStream { name: name.clone(), from: from.into() };
-                            streams.push(stream);
-                        }
-
-                        let subscription = Command::Subscribe { streams };
-                        self.start_send(subscription.into())?;
-                        self.poll_complete()?;
-
-                        self.poll()
-                    },
-                    Ok(Async::NotReady) => Ok(Async::NotReady),
-                    Err(error) => Err(error.into()),
-                }
-            },
+        if self.connection.has_been_reconnected() {
+            self.send_stream_subscriptions()?;
         }
+
+        result
     }
 }
 
@@ -137,35 +232,23 @@ impl Sink for EventStream {
             }
         }
 
-        match &mut self.connection {
-            Connection::Connected(connection) => connection.start_send(item), // TODO check if that can be done
-            Connection::Connecting(connect) => {
-                match connect.poll() {
-                    Ok(Async::Ready(connection)) => {
-                        self.connection = Connection::Connected(connection);
-                        self.start_send(item)
-                    },
-                    Ok(Async::NotReady) => Ok(AsyncSink::NotReady(item)),
-                    Err(error) => Err(error.into()),
-                }
-            },
+        let result = self.connection.start_send(item);
+
+        if self.connection.has_been_reconnected() {
+            self.send_stream_subscriptions()?;
         }
+
+        result
     }
 
     fn poll_complete(&mut self) -> Result<Async<()>, Self::SinkError> {
-        match &mut self.connection {
-            Connection::Connected(connection) => connection.poll_complete(), // TODO check if that can be done
-            Connection::Connecting(connect) => {
-                match connect.poll() {
-                    Ok(Async::Ready(connection)) => {
-                        self.connection = Connection::Connected(connection);
-                        self.poll_complete()
-                    },
-                    Ok(Async::NotReady) => Ok(Async::NotReady),
-                    Err(error) => Err(error.into()),
-                }
-            },
+        let result = self.connection.poll_complete();
+
+        if self.connection.has_been_reconnected() {
+            self.send_stream_subscriptions()?;
         }
+
+        result
     }
 }
 
