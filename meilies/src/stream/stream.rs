@@ -12,6 +12,33 @@ pub enum StartReadFrom {
     End,
 }
 
+impl StartReadFrom {
+    pub fn map<F: FnOnce(u64) -> u64>(self, f: F) -> StartReadFrom {
+        match self {
+            StartReadFrom::EventNumber(number) => StartReadFrom::EventNumber(f(number)),
+            StartReadFrom::End => StartReadFrom::End,
+        }
+    }
+}
+
+impl Into<Option<u64>> for StartReadFrom {
+    fn into(self) -> Option<u64> {
+        match self {
+            StartReadFrom::EventNumber(number) => Some(number),
+            StartReadFrom::End => None,
+        }
+    }
+}
+
+impl From<Option<u64>> for StartReadFrom {
+    fn from(option: Option<u64>) -> StartReadFrom {
+        match option {
+            Some(number) => StartReadFrom::EventNumber(number),
+            None => StartReadFrom::End,
+        }
+    }
+}
+
 #[derive(Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub struct Stream {
     pub name: StreamName,

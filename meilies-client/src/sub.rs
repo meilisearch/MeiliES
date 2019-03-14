@@ -3,9 +3,9 @@ use std::net::SocketAddr;
 use std::io;
 
 use futures::{future, Future, Poll, Async, AsyncSink, Stream, Sink};
-use log::error;
+use log::{error, warn};
 use meilies::command::Command;
-use meilies::resp::{RespCodec, RespMsgError, FromResp};
+use meilies::resp::{RespCodec, RespValue, RespMsgError, FromResp};
 use meilies::stream::{
     Message, StartReadFrom, RespMessageConvertError, Stream as EsStream, StreamName, EventNumber
 };
@@ -14,6 +14,7 @@ use tokio::sync::mpsc;
 use tokio::codec::Framed;
 use futures::stream::SplitStream;
 use tokio_retry::{Retry, strategy::FibonacciBackoff};
+use tokio_retry::Error as TrError;
 
 use super::{connect, RespConnection, RespConnectionReader};
 
@@ -22,44 +23,81 @@ enum Connection {
     Connecting(Box<Future<Item=TcpStream, Error=io::Error> + Send>), // FIXME: Use a struct instead
 }
 
-impl Stream for Connection {
-    type Item = <RespConnection as Stream>::Item;
-    type Error = <RespConnection as Stream>::Error;
+pub struct EventStream {
+    state: HashMap<StreamName, Option<u64>>,
+    addr: SocketAddr,
+    connection: Connection,
+}
+
+impl EventStream {
+    fn connect(addr: SocketAddr) -> impl Future<Item=EventStream, Error=io::Error> {
+        connect(&addr)
+            .map(move |connection| {
+                EventStream {
+                    state: HashMap::new(),
+                    addr: addr,
+                    connection: Connection::Connected(connection),
+                }
+            })
+    }
+}
+
+impl Stream for EventStream {
+    type Item = RespValue;
+    type Error = RespMsgError;
 
     fn poll(&mut self) -> Result<Async<Option<Self::Item>>, Self::Error> {
-        match self {
+        match &mut self.connection {
             Connection::Connected(connection) => {
                 match connection.poll() {
+                    Ok(Async::Ready(Some(item))) => {
+
+                        if let Ok(Message::Event(stream, number, _)) = FromResp::from_resp(item.clone()) {
+                            self.state.insert(stream.name, Some(number.0 + 1));
+                        }
+
+                        Ok(Async::Ready(Some(item)))
+                    },
                     Ok(Async::Ready(None)) => {
-                        eprintln!("Nothing to see here");
-                        let addr = connection.get_ref().peer_addr().unwrap();
+                        error!("Connection closed");
 
-                        println!("addr: {:?}", addr);
-
+                        let addr = self.addr;
                         let strategy = FibonacciBackoff::from_millis(100);
                         let retry = Retry::spawn(strategy, move || {
-                                eprintln!("Trying to reconnect to the server...");
+                                warn!("Trying to reconnect to {}...", addr);
                                 TcpStream::connect(&addr)
                             })
-                            .map_err(|e| unimplemented!());
+                            .map_err(|error| match error {
+                                TrError::OperationError(e) => e,
+                                TrError::TimerError(e) => io::Error::new(io::ErrorKind::Other, e),
+                            });
 
-                        *self = Connection::Connecting(Box::new(retry));
+                        self.connection = Connection::Connecting(Box::new(retry));
                         self.poll()
                     },
-                    Err(error) => {
-                        eprintln!("Connection error: {}", error);
-                        Err(error)
-                    },
+                    Err(error) => Err(error),
                     otherwise => otherwise,
                 }
             },
             Connection::Connecting(connect) => {
                 match connect.poll() {
                     Ok(Async::Ready(conn)) => {
-                        println!("JUST CONNECTED for Stream::poll!");
-                        *self = Connection::Connected(Framed::new(conn, RespCodec));
+                        self.connection = Connection::Connected(Framed::new(conn, RespCodec));
 
-                        // send subscription!!
+                        // Now that a new connection have been successfully established
+                        // we can re-send our subscriptions with the appropriate event number,
+                        // this means the event number just after the last event number we received.
+
+                        let mut streams = Vec::with_capacity(self.state.len());
+
+                        for (name, &from) in &self.state {
+                            let stream = EsStream { name: name.clone(), from: from.into() };
+                            streams.push(stream);
+                        }
+
+                        let subscription = Command::Subscribe { streams };
+                        self.start_send(subscription.into())?;
+                        self.poll_complete()?;
 
                         self.poll()
                     },
@@ -71,18 +109,23 @@ impl Stream for Connection {
     }
 }
 
-impl Sink for Connection {
-    type SinkItem = <RespConnection as Sink>::SinkItem;
-    type SinkError = <RespConnection as Sink>::SinkError;
+impl Sink for EventStream {
+    type SinkItem = RespValue;
+    type SinkError = RespMsgError;
 
     fn start_send(&mut self, item: Self::SinkItem) -> Result<AsyncSink<Self::SinkItem>, Self::SinkError> {
-        match self {
+        if let Ok(Command::Subscribe { streams }) = Command::from_resp(item.clone()) {
+            for EsStream { name, from } in streams {
+                self.state.insert(name, from.into());
+            }
+        }
+
+        match &mut self.connection {
             Connection::Connected(connection) => connection.start_send(item),
             Connection::Connecting(connect) => {
                 match connect.poll() {
                     Ok(Async::Ready(conn)) => {
-                        println!("JUST CONNECTED for Sink::start_send!");
-                        *self = Connection::Connected(Framed::new(conn, RespCodec));
+                        self.connection = Connection::Connected(Framed::new(conn, RespCodec));
                         self.start_send(item)
                     },
                     Ok(Async::NotReady) => Ok(AsyncSink::NotReady(item)),
@@ -93,13 +136,12 @@ impl Sink for Connection {
     }
 
     fn poll_complete(&mut self) -> Result<Async<()>, Self::SinkError> {
-        match self {
+        match &mut self.connection {
             Connection::Connected(connection) => connection.poll_complete(),
             Connection::Connecting(connect) => {
                 match connect.poll() {
                     Ok(Async::Ready(conn)) => {
-                        println!("JUST CONNECTED for Sink::poll_complete!");
-                        *self = Connection::Connected(Framed::new(conn, RespCodec));
+                        self.connection = Connection::Connected(Framed::new(conn, RespCodec));
                         self.poll_complete()
                     },
                     Ok(Async::NotReady) => Ok(Async::NotReady),
@@ -107,81 +149,6 @@ impl Sink for Connection {
                 }
             },
         }
-    }
-}
-
-pub struct EventStream {
-    state: HashMap<StreamName, Option<EventNumber>>,
-    addr: SocketAddr,
-    inner: Connection,
-}
-
-impl EventStream {
-    fn connect(addr: SocketAddr) -> impl Future<Item=EventStream, Error=io::Error> {
-        connect(&addr)
-            .map(move |connection| {
-                EventStream {
-                    state: HashMap::new(),
-                    addr: addr,
-                    inner: Connection::Connected(connection),
-                }
-            })
-    }
-}
-
-impl Stream for EventStream {
-    type Item = <RespConnection as Stream>::Item;
-    type Error = <RespConnection as Stream>::Error;
-
-    fn poll(&mut self) -> Result<Async<Option<Self::Item>>, Self::Error> {
-        println!("poll");
-
-        match self.inner.poll() {
-            Ok(Async::Ready(Some(item))) => {
-
-                if let Ok(Message::Event(stream, number, _)) = FromResp::from_resp(item.clone()) {
-                    let EsStream { name, from } = stream;
-                    self.state.insert(name, Some(number));
-                    println!("Stream: state is {:?}", self.state);
-                }
-
-                Ok(Async::Ready(Some(item)))
-            },
-            otherwise => otherwise
-        }
-    }
-}
-
-impl Sink for EventStream {
-    type SinkItem = <RespConnection as Sink>::SinkItem;
-    type SinkError = <RespConnection as Sink>::SinkError;
-
-    fn start_send(&mut self, item: Self::SinkItem) -> Result<AsyncSink<Self::SinkItem>, Self::SinkError> {
-        println!("start_send");
-
-        if let Ok(Command::Subscribe { streams }) = Command::from_resp(item.clone()) {
-            for EsStream { name, from } in streams {
-                let number = match from {
-                    StartReadFrom::EventNumber(number) => Some(EventNumber(number)),
-                    StartReadFrom::End => None,
-                };
-                self.state.insert(name, number);
-            }
-            println!("Sink: state is {:?}", self.state);
-        }
-
-        match self.inner.start_send(item) {
-            Err(error) => {
-                eprintln!("WOWOOW!!! {:?}", error);
-                Err(error)
-            },
-            otherwise => otherwise,
-        }
-    }
-
-    fn poll_complete(&mut self) -> Result<Async<()>, Self::SinkError> {
-        println!("poll_complete");
-        self.inner.poll_complete()
     }
 }
 
