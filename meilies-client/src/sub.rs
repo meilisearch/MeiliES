@@ -20,7 +20,11 @@ use super::{connect, RespConnection, RespConnectionReader};
 
 enum Connection {
     Connected(RespConnection),
-    Connecting(Box<Future<Item=TcpStream, Error=io::Error> + Send>), // FIXME: Use a struct instead
+    Connecting(Box<Future<Item=TcpStream, Error=io::Error> + Send>),
+}
+
+fn retry_strategy() -> std::iter::Take<FibonacciBackoff> {
+    FibonacciBackoff::from_millis(100).take(50)
 }
 
 pub struct EventStream {
@@ -30,15 +34,19 @@ pub struct EventStream {
 }
 
 impl EventStream {
-    fn connect(addr: SocketAddr) -> impl Future<Item=EventStream, Error=io::Error> {
-        connect(&addr)
-            .map(move |connection| {
-                EventStream {
-                    state: HashMap::new(),
-                    addr: addr,
-                    connection: Connection::Connected(connection),
-                }
-            })
+    fn connect(addr: SocketAddr) -> impl Future<Item=EventStream, Error=tokio_retry::Error<io::Error>> {
+        Retry::spawn(retry_strategy(), move || {
+            warn!("Trying to connect to {}...", addr);
+
+            connect(&addr)
+                .map(move |connection| {
+                    EventStream {
+                        state: HashMap::new(),
+                        addr: addr,
+                        connection: Connection::Connected(connection),
+                    }
+                })
+        })
     }
 }
 
@@ -62,8 +70,7 @@ impl Stream for EventStream {
                         error!("Connection closed");
 
                         let addr = self.addr;
-                        let strategy = FibonacciBackoff::from_millis(100);
-                        let retry = Retry::spawn(strategy, move || {
+                        let retry = Retry::spawn(retry_strategy(), move || {
                                 warn!("Trying to reconnect to {}...", addr);
                                 TcpStream::connect(&addr)
                             })
@@ -121,7 +128,7 @@ impl Sink for EventStream {
         }
 
         match &mut self.connection {
-            Connection::Connected(connection) => connection.start_send(item),
+            Connection::Connected(connection) => connection.start_send(item), // TODO check if that can be done
             Connection::Connecting(connect) => {
                 match connect.poll() {
                     Ok(Async::Ready(conn)) => {
@@ -137,7 +144,7 @@ impl Sink for EventStream {
 
     fn poll_complete(&mut self) -> Result<Async<()>, Self::SinkError> {
         match &mut self.connection {
-            Connection::Connected(connection) => connection.poll_complete(),
+            Connection::Connected(connection) => connection.poll_complete(), // TODO check if that can be done
             Connection::Connecting(connect) => {
                 match connect.poll() {
                     Ok(Async::Ready(conn)) => {
@@ -158,11 +165,9 @@ pub fn sub_connect(
 {
     let strategy = FibonacciBackoff::from_millis(100);
 
-    let retry = Retry::spawn(strategy, move || {
-        EventStream::connect(addr).map_err(|e| dbg!(e))
-    });
+    let event_stream = EventStream::connect(addr).map_err(|e| dbg!(e));
 
-    retry.map(|connection| {
+    event_stream.map(|connection| {
         let (writer, reader) = connection.split();
         let (sender, receiver) = mpsc::unbounded_channel();
 
