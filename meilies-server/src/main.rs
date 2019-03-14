@@ -146,8 +146,7 @@ fn handle_command(
 
                 let tree = db.open_tree(stream.name.clone().into_bytes())?;
 
-                let streams = vec![stream.name.clone()];
-                let subscribed = Message::SubscribedTo { streams };
+                let subscribed = Message::SubscribedTo { stream: stream.name.clone() };
                 let subscribed = subscribed.into();
 
                 if sender.start_send(subscribed).is_err() {

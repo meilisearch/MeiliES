@@ -3,7 +3,7 @@ use crate::resp::{RespValue, FromResp};
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Message {
-    SubscribedTo { streams: Vec<StreamName> },
+    SubscribedTo { stream: StreamName },
     Event(StreamName, EventNumber, EventData),
 }
 
@@ -32,10 +32,10 @@ impl FromResp for Message {
         match message_type.as_str() {
             "subscribed" => {
                 let value = args.next().ok_or(MissingMessageElement)?;
-                let streams = Vec::<StreamName>::from_resp(value)
+                let stream = StreamName::from_resp(value)
                     .map_err(|e| InvalidRespValue(e.to_string()))?;
 
-                Ok(Message::SubscribedTo { streams })
+                Ok(Message::SubscribedTo { stream })
             },
             "event" => {
                 let value = args.next().ok_or(MissingMessageElement)?;
@@ -60,10 +60,10 @@ impl FromResp for Message {
 impl Into<RespValue> for Message {
     fn into(self) -> RespValue {
         match self {
-            Message::SubscribedTo { streams } => {
+            Message::SubscribedTo { stream } => {
                 RespValue::Array(vec![
                     RespValue::string("subscribed"),
-                    RespValue::Array(streams.into_iter().map(RespValue::string).collect()),
+                    RespValue::string(stream),
                 ])
             },
             Message::Event(stream, EventNumber(event_number), EventData(value)) => {

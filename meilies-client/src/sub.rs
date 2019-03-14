@@ -198,10 +198,10 @@ impl Stream for EventStream {
                     Ok(Message::Event(stream_name, number, _)) => {
                         self.state.insert(stream_name, Some(number.0 + 1));
                     },
-                    Ok(Message::SubscribedTo { streams }) => {
+                    Ok(Message::SubscribedTo { stream }) => {
                         // if we were already subscribed to a stream and we are reconnecting
                         // we do not return the message validating a subscription to the user
-                        if self.state.contains_key(&streams[0]) {
+                        if self.state.contains_key(&stream) {
                             return self.poll();
                         }
                     },
