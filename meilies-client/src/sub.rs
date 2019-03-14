@@ -13,8 +13,14 @@ use tokio_retry::RetryIf;
 
 use super::{connect, retry_strategy, must_retry, SteelConnection};
 
+#[derive(Default)]
+struct StreamContext {
+    reconnected: bool,
+    position: Option<u64>,
+}
+
 pub struct EventStream {
-    state: HashMap<StreamName, Option<u64>>,
+    state: HashMap<StreamName, StreamContext>,
     connection: SteelConnection,
 }
 
@@ -36,8 +42,9 @@ impl EventStream {
 
         let mut streams = Vec::with_capacity(self.state.len());
 
-        for (name, &from) in &self.state {
-            let stream = EsStream { name: name.clone(), from: from.into() };
+        for (name, context) in &mut self.state {
+            context.reconnected = true;
+            let stream = EsStream { name: name.clone(), from: context.position.into() };
             streams.push(stream);
         }
 
@@ -58,12 +65,12 @@ impl Stream for EventStream {
             Ok(Async::Ready(Some(item))) => {
                 match FromResp::from_resp(item.clone()) {
                     Ok(Message::Event(stream_name, number, _)) => {
-                        self.state.insert(stream_name, Some(number.0 + 1));
+                        self.state.entry(stream_name).or_default().position = Some(number.0 + 1);
                     },
                     Ok(Message::SubscribedTo { stream }) => {
                         // if we were already subscribed to a stream and we are reconnecting
                         // we do not return the message validating a subscription to the user
-                        if self.state.contains_key(&stream) {
+                        if self.state.get(&stream).map_or(false, |c| c.reconnected) {
                             return self.poll();
                         }
                     },
@@ -90,7 +97,7 @@ impl Sink for EventStream {
     fn start_send(&mut self, item: Self::SinkItem) -> Result<AsyncSink<Self::SinkItem>, Self::SinkError> {
         if let Ok(Command::Subscribe { streams }) = Command::from_resp(item.clone()) {
             for EsStream { name, from } in streams {
-                self.state.insert(name, from.into());
+                self.state.entry(name).or_default().position = from.into();
             }
         }
 
