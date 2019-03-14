@@ -11,9 +11,11 @@ use log::warn;
 
 mod sub;
 mod paired;
+mod steel_connection;
 
 pub use self::sub::{sub_connect, SubStream, SubController, ProtocolError};
 pub use self::paired::{paired_connect, PairedConnection};
+pub use self::steel_connection::{retry_strategy, must_retry, SteelConnection};
 
 pub type RespConnection = Framed<TcpStream, RespCodec>;
 pub type RespConnectionWriter = SplitSink<Framed<TcpStream, RespCodec>>;
