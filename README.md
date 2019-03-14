@@ -1,5 +1,11 @@
 # MeiliES
 
+[![Build Status](https://dev.azure.com/thomas0884/thomas/_apis/build/status/meilisearch.MeiliES?branchName=master)](https://dev.azure.com/thomas0884/thomas/_build/latest?definitionId=10&branchName=master)
+[![dependency status](https://deps.rs/repo/github/meilisearch/MeiliES/status.svg)](https://deps.rs/repo/github/meilisearch/MeiliES)
+[![License](https://img.shields.io/github/license/meilisearch/MeiliES.svg)](https://github.com/meilisearch/MeiliES)
+[![Rust 1.33+](https://img.shields.io/badge/rust-1.33+-lightgray.svg)](
+https://www.rust-lang.org)
+
 MeiliES is an _Event Sourcing database_ that uses the **RESP** (REdis Serialization Protocol) to communicate.
 This way it is possible to create clients by reusing the already available protocol.
 For example it is possible to use [the official Redis command line interface] program to communicate with MeiliES.

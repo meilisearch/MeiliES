@@ -1,0 +1,60 @@
+---
+trigger:
+  branches:
+    include: [ master ]
+
+pr: [ master ]
+
+jobs:
+  - job: test
+    pool:
+      vmImage: 'Ubuntu 16.04'
+    container: tpayet/chiquitita:latest
+    steps:
+      - script: |
+          curl https://sh.rustup.rs -sSf | sh -s -- -y --default-toolchain stable
+        displayName: 'Install rustc'
+      - script: |
+          $HOME/.cargo/bin/rustup install nightly
+        displayName: 'Install nigtly rust'
+      - script: |
+          $HOME/.cargo/bin/cargo check
+          $HOME/.cargo/bin/cargo +nightly check
+        displayName: 'Check MeiliES'
+      - script: |
+          $HOME/.cargo/bin/cargo test
+          $HOME/.cargo/bin/cargo +nightly test
+        displayName: 'Test MeiliES'
+
+  - job: build
+    dependsOn:
+      - test
+    condition: succeeded()
+    pool:
+      vmImage: 'Ubuntu 16.04'
+    strategy:
+      matrix:
+        ubuntu1604:
+          containerResource: tpayet/chiquitita:latest
+          artifactResource: MeiliES-ubuntu16.04
+        centos7:
+          containerResource: tpayet/fernando:latest
+          artifactResource: MeiliES-centos7
+    container: $[ variables['containerResource'] ]
+    steps:
+      - script: |
+          curl https://sh.rustup.rs -sSf | sh -s -- -y --default-toolchain stable
+        displayName: 'Install rustc'
+      - script: |
+          $HOME/.cargo/bin/cargo build --release
+        displayName: 'Build MeiliES'
+      - task: CopyFiles@2
+        inputs:
+          contents: '$(System.DefaultWorkingDirectory)/target/release/*'
+          targetFolder: $(Build.ArtifactStagingDirectory)
+        displayName: 'Copy build'
+      - task: PublishBuildArtifacts@1
+        inputs:
+          artifactName: $(artifactResource)
+        displayName: 'Upload artifacts'
+
