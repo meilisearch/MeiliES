@@ -6,15 +6,17 @@ use meilies::resp::{FromResp, RespMsgError};
 use meilies::stream::{StreamName, EventData};
 use meilies::command::Command;
 
-use super::{connect, RespConnection};
+use super::{connect, SteelConnection};
 
-pub fn paired_connect(addr: &SocketAddr) -> impl Future<Item=PairedConnection, Error=io::Error> {
-    connect(&addr).map(PairedConnection::new)
+pub fn paired_connect(addr: SocketAddr) -> impl Future<Item=PairedConnection, Error=io::Error> {
+    connect(&addr)
+        .map(move |connection| {
+            PairedConnection::new(SteelConnection::new(addr, connection))
+        })
 }
 
-#[derive(Debug)]
 pub struct PairedConnection {
-    connection: RespConnection,
+    connection: SteelConnection,
 }
 
 #[derive(Debug)]
@@ -41,7 +43,7 @@ impl fmt::Display for PairedConnectionError {
 }
 
 impl PairedConnection {
-    pub fn new(connection: RespConnection) -> PairedConnection {
+    pub fn new(connection: SteelConnection) -> PairedConnection {
         PairedConnection { connection }
     }
 

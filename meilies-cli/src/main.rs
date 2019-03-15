@@ -64,7 +64,7 @@ fn main() {
             Box::new(fut) as Box<dyn Future<Item=(), Error=()> + Send>
         },
         Command::Publish { stream, event } => {
-            let fut = paired_connect(&addr)
+            let fut = paired_connect(addr)
                 .map_err(|e| error!("{}", e))
                 .and_then(|conn| {
                     conn.publish(stream, event.0)
