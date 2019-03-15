@@ -19,7 +19,7 @@ Once you have Rust in your `PATH` you can clone and build the MeiliES binaries.
 git clone https://github.com/meilisearch/MeiliES.git
 cd MeiliES
 cargo install --path meilies-server
-cargo install --path meilies-client
+cargo install --path meilies-cli
 ```
 
 ## Basic Event Store Usage
@@ -34,17 +34,17 @@ There is now a MeiliES server running on your machine and listening on `127.0.0.
 In another terminal window you can specify to a client to listen to only new events.
 
 ```bash
-meilies-client subscribe 'my-little-stream'
+meilies-cli subscribe 'my-little-stream'
 ```
 
 And in another one again you can send new events.
 All clients which are subscribed to that same stream will see the events.
 
 ```bash
-meilies-client publish 'my-little-stream' 'Hello World!'
-meilies-client publish 'my-little-stream' 'Hello Cathy!'
-meilies-client publish 'my-little-stream' 'Hello Kevin!'
-meilies-client publish 'my-little-stream' 'Hello Donut!'
+meilies-cli publish 'my-little-stream' 'Hello World!'
+meilies-cli publish 'my-little-stream' 'Hello Cathy!'
+meilies-cli publish 'my-little-stream' 'Hello Kevin!'
+meilies-cli publish 'my-little-stream' 'Hello Donut!'
 ```
 
 But that is not a really interresting usage of Event Sourcing, right?!
@@ -60,21 +60,27 @@ Once there is no more events in the stream, the server start sending events at t
 We can do that by prepending the start event number separated by a colon.
 
 ```bash
-meilies-client subscribe 'my-little-stream:0'
+meilies-cli subscribe 'my-little-stream:0'
 ```
 
 In this example we will start reading from the first event of the stream.
 But we can also specify to start reading from the third event too.
 
 ```bash
-meilies-client subscribe 'my-little-stream:2'
+meilies-cli subscribe 'my-little-stream:2'
 ```
 
 Or from events which does not exists yet!
 Try sending events to this stream and you will see: only events from the fifth one will appear.
 
 ```bash
-meilies-client subscribe 'my-little-stream:5'
+meilies-cli subscribe 'my-little-stream:5'
 ```
+
+## Current Limitations
+
+The current implementation has some limitations related to the whole number of streams subscribed. The problem is that one thread is spawn for each stream and for each client. For example, if two clients subscribe to the same stream, the server will spawn two threads, one for each client instead of spawning only one thread and sending new events to a clients pool.
+
+Even uglier, if a client is closing the connection, the spawned threads will not stop immediatly but after some stream activity.
 
 [the official Redis command line interface]: https://redis.io/topics/rediscli
