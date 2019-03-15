@@ -1,4 +1,4 @@
-use crate::stream::{Stream, StreamName, EventData, EventNumber};
+use crate::stream::{StreamName, EventData, EventNumber};
 use crate::resp::{RespValue, FromResp};
 
 #[derive(Debug, Clone, PartialEq, Eq)]

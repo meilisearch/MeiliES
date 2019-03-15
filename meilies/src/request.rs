@@ -60,7 +60,7 @@ impl FromResp for Request {
 
         let mut iter = match value {
             RespValue::Array(array) => array.into_iter(),
-            otherwise => return Err(InvalidCommandRespType),
+            _otherwise => return Err(InvalidCommandRespType),
         };
 
         let command = iter.next().map(String::from_resp)
