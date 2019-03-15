@@ -6,6 +6,7 @@ use crate::resp::{RespValue, FromResp};
 pub enum Request {
     Subscribe { streams: Vec<Stream> },
     Publish { stream: StreamName, event: EventData },
+    LastEventNumber { stream: StreamName },
 }
 
 impl Into<RespValue> for Request {
@@ -22,6 +23,12 @@ impl Into<RespValue> for Request {
                     RespValue::bulk_string(&"publish"[..]),
                     RespValue::bulk_string(stream.to_string()),
                     RespValue::bulk_string(event.0),
+                ])
+            },
+            Request::LastEventNumber { stream } => {
+                RespValue::Array(vec![
+                    RespValue::bulk_string(&"last-event-number"[..]),
+                    RespValue::bulk_string(stream.to_string()),
                 ])
             }
         }
@@ -88,6 +95,17 @@ impl FromResp for Request {
 
                 Ok(Request::Publish { stream, event })
             },
+            "last-event-number" => {
+                let stream = iter.next().map(StreamName::from_resp)
+                    .ok_or(MissingArgument)?
+                    .map_err(|_| InvalidArgumentRespType)?;
+
+                if iter.next().is_some() {
+                    return Err(TooManyArguments)
+                }
+
+                Ok(Request::LastEventNumber { stream })
+            }
             _otherwise => Err(UnknownCommandName),
         }
     }

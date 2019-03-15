@@ -7,6 +7,7 @@ pub enum Response {
     Ok,
     Subscribed { stream: StreamName },
     Event { stream: StreamName, number: EventNumber, event: EventData },
+    LastEventNumber { stream: StreamName, number: Option<EventNumber> },
 }
 
 impl Into<RespValue> for Response {
@@ -29,6 +30,18 @@ impl Into<RespValue> for Response {
                     RespValue::bulk_string(event.0),
                 ])
             },
+            Response::LastEventNumber { stream, number } => {
+                let number = match number {
+                    Some(number) => RespValue::Integer(number.0 as i64),
+                    None => RespValue::Nil,
+                };
+
+                RespValue::Array(vec![
+                    RespValue::string("last-event-number"),
+                    RespValue::string(stream),
+                    number,
+                ])
+            }
         }
     }
 }
@@ -104,6 +117,21 @@ impl FromResp for Response {
 
                 Ok(Response::Event { stream, number, event })
             },
+            "last-event-number" => {
+                let stream = iter.next().map(StreamName::from_resp)
+                    .ok_or(MissingArgument)?
+                    .map_err(|_| InvalidArgumentRespType)?;
+
+                let number = iter.next().map(FromResp::from_resp)
+                    .ok_or(MissingArgument)?
+                    .map_err(|_| InvalidArgumentRespType)?;
+
+                if iter.next().is_some() {
+                    return Err(TooManyArguments)
+                }
+
+                Ok(Response::LastEventNumber { stream, number })
+            }
             _otherwise => Err(UnknownTypeName),
         }
     }

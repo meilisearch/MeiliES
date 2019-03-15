@@ -78,7 +78,20 @@ fn main() {
                 .map(|_conn| println!("Event sent to the stream"));
 
             Box::new(fut) as Box<dyn Future<Item=(), Error=()> + Send>
-        }
+        },
+        Request::LastEventNumber { stream } => {
+            let fut = paired_connect(addr)
+                .map_err(|e| error!("{}", e))
+                .and_then(|conn| {
+                    conn.last_event_number(stream)
+                        .map_err(|e| error!("{}", e))
+                })
+                .map(|(stream, number, _conn)| {
+                    println!("{:?} - {:?}", stream, number)
+                });
+
+            Box::new(fut) as Box<dyn Future<Item=(), Error=()> + Send>
+        },
     };
 
     tokio::run(fut);

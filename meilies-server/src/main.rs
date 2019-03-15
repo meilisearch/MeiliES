@@ -178,6 +178,15 @@ fn handle_request(
             if sender.start_send(Ok(Response::Ok)).is_err() {
                 info!("encountered closed channel");
             }
+        },
+        Request::LastEventNumber { stream } => {
+            let tree = db.open_tree(stream.clone().into_bytes())?;
+            let number = tree.len().checked_sub(1).map(|x| EventNumber(x as u64));
+
+            let last_event_number = Response::LastEventNumber { stream, number };
+            if sender.start_send(Ok(last_event_number)).is_err() {
+                info!("encountered closed channel");
+            }
         }
     }
 

@@ -2,7 +2,7 @@ use std::net::SocketAddr;
 use std::{fmt, io};
 
 use futures::{Future, Stream, Sink};
-use meilies::stream::{StreamName, EventData};
+use meilies::stream::{StreamName, EventNumber, EventData};
 use meilies::reqresp::{Request, RequestMsgError};
 use meilies::reqresp::{Response, ResponseMsgError};
 
@@ -59,7 +59,6 @@ impl PairedConnection {
 
         let event = EventData(event);
         let command = Request::Publish { stream, event };
-        let command = command.into();
 
         self.connection
             .send(command)
@@ -68,6 +67,28 @@ impl PairedConnection {
             .and_then(|(first, connection)| {
                 match first.ok_or(ConnectionClosed)? {
                     Ok(Response::Ok) => Ok(PairedConnection { connection }),
+                    Ok(response) => Err(InvalidServerResponse(response)),
+                    Err(error) => Err(ServerSide(error)),
+                }
+            })
+    }
+
+    pub fn last_event_number(
+        self,
+        stream: StreamName
+    ) -> impl Future<Item=(StreamName, Option<EventNumber>, PairedConnection), Error=PairedConnectionError>
+    {
+        use PairedConnectionError::*;
+
+        let command = Request::LastEventNumber { stream };
+
+        self.connection
+            .send(command)
+            .map_err(RequestMsgError)
+            .and_then(|framed| framed.into_future().map_err(|(e, _)| ResponseMsgError(e)))
+            .and_then(|(first, connection)| {
+                match first.ok_or(ConnectionClosed)? {
+                    Ok(Response::LastEventNumber { stream, number }) => Ok((stream, number, PairedConnection { connection })),
                     Ok(response) => Err(InvalidServerResponse(response)),
                     Err(error) => Err(ServerSide(error)),
                 }
