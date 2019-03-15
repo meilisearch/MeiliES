@@ -60,6 +60,17 @@ impl fmt::Display for Stream {
     }
 }
 
+impl Into<RespValue> for Stream {
+    fn into(self) -> RespValue {
+        let text = match self.from {
+            StartReadFrom::EventNumber(number) => format!("{}:{}", self.name, number),
+            StartReadFrom::End => format!("{}", self.name),
+        };
+
+        RespValue::BulkString(text.into_bytes())
+    }
+}
+
 #[derive(Debug)]
 pub enum RespStreamConvertError {
     InvalidRespType,
