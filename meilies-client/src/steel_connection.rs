@@ -3,11 +3,11 @@ use std::{io, mem};
 
 use futures::{Future, Async, AsyncSink, Stream, Sink};
 use log::{error, warn, info};
-use meilies::resp::{RespValue, RespMsgError};
+use meilies::reqresp::{Request, RequestMsgError, Response, ResponseMsgError};
 use tokio_retry::{RetryIf, strategy::FibonacciBackoff};
 use tokio_retry::Error as TrError;
 
-use super::{connect, RespConnection};
+use super::{connect, ClientConnection};
 
 pub struct SteelConnection {
     addr: SocketAddr,
@@ -16,12 +16,12 @@ pub struct SteelConnection {
 }
 
 enum ConnState {
-    Connected(RespConnection),
-    Connecting(Box<Future<Item=RespConnection, Error=io::Error> + Send>),
+    Connected(ClientConnection),
+    Connecting(Box<Future<Item=ClientConnection, Error=io::Error> + Send>),
 }
 
 impl SteelConnection {
-    pub fn new(addr: SocketAddr, connection: RespConnection) -> SteelConnection {
+    pub fn new(addr: SocketAddr, connection: ClientConnection) -> SteelConnection {
         SteelConnection { addr, reconnected: false, conn_state: ConnState::Connected(connection) }
     }
 
@@ -40,7 +40,7 @@ pub fn must_retry(e: &io::Error) -> bool {
     e.kind() == BrokenPipe || e.kind() == ConnectionRefused
 }
 
-fn retry_future(addr: SocketAddr) -> Box<Future<Item=RespConnection, Error=io::Error> + Send> {
+fn retry_future(addr: SocketAddr) -> Box<Future<Item=ClientConnection, Error=io::Error> + Send> {
     let retry = RetryIf::spawn(retry_strategy(), move || {
             warn!("Reconnecting to {}", addr);
             connect(&addr)
@@ -54,8 +54,8 @@ fn retry_future(addr: SocketAddr) -> Box<Future<Item=RespConnection, Error=io::E
 }
 
 impl Stream for SteelConnection {
-    type Item = RespValue;
-    type Error = RespMsgError;
+    type Item = Result<Response, String>;
+    type Error = ResponseMsgError;
 
     fn poll(&mut self) -> Result<Async<Option<Self::Item>>, Self::Error> {
         match &mut self.conn_state {
@@ -67,8 +67,11 @@ impl Stream for SteelConnection {
                         self.poll()
                     },
                     Err(error) => {
+                        use ResponseMsgError::RespMsgError;
+                        use meilies::resp::RespMsgError::IoError;
+
                         match error {
-                            RespMsgError::IoError(ref e) if must_retry(e) => {
+                            RespMsgError(IoError(ref e)) if must_retry(e) => {
                                 error!("Connection error with {}; {}", self.addr, e);
                                 self.conn_state = ConnState::Connecting(retry_future(self.addr));
                                 self.poll()
@@ -96,8 +99,8 @@ impl Stream for SteelConnection {
 }
 
 impl Sink for SteelConnection {
-    type SinkItem = RespValue;
-    type SinkError = RespMsgError;
+    type SinkItem = Request;
+    type SinkError = RequestMsgError;
 
     fn start_send(&mut self, item: Self::SinkItem) -> Result<AsyncSink<Self::SinkItem>, Self::SinkError> {
         match &mut self.conn_state {
@@ -126,11 +129,14 @@ impl Sink for SteelConnection {
             ConnState::Connected(connection) => {
                 match connection.poll_complete() {
                     Err(error) => {
+                        use RequestMsgError::RespMsgError;
+                        use meilies::resp::RespMsgError::IoError;
+
                         match error {
-                            RespMsgError::IoError(ref e) if must_retry(e) => {
+                            RespMsgError(IoError(ref e)) if must_retry(e) => {
                                 error!("Connection error with {}; {}", self.addr, e);
-                                self.conn_state = ConnState::Connecting(retry_future(self.addr));
-                                self.poll_complete()
+                            self.conn_state = ConnState::Connecting(retry_future(self.addr));
+                            self.poll_complete()
                             },
                             otherwise => Err(otherwise),
                         }

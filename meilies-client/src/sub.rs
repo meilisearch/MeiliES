@@ -1,12 +1,12 @@
 use std::collections::HashMap;
 use std::net::SocketAddr;
-use std::io;
+use std::{fmt, io};
 
 use futures::{Future, Poll, Async, AsyncSink, Stream, Sink};
 use log::{error, warn};
-use meilies::command::Command;
-use meilies::resp::{RespValue, RespMsgError, FromResp};
-use meilies::stream::{Message, RespMessageConvertError, Stream as EsStream, StreamName};
+use meilies::resp::RespMsgError;
+use meilies::reqresp::{Request, RequestMsgError, Response, ResponseMsgError};
+use meilies::stream::{Stream as EsStream, StreamName};
 use tokio::sync::mpsc;
 use futures::stream::SplitStream;
 use tokio_retry::RetryIf;
@@ -36,7 +36,7 @@ impl EventStream {
         }, must_retry)
     }
 
-    fn send_stream_subscriptions(&mut self) -> Result<(), RespMsgError> {
+    fn send_stream_subscriptions(&mut self) -> Result<(), ProtocolError> {
         // Now that a new connection has been successfully established
         // we can re-send our subscriptions with the appropriate event number.
 
@@ -48,8 +48,8 @@ impl EventStream {
             streams.push(stream);
         }
 
-        let subscription = Command::Subscribe { streams };
-        self.start_send(subscription.into())?;
+        let subscription = Request::Subscribe { streams };
+        self.start_send(subscription)?;
         self.poll_complete()?;
 
         Ok(())
@@ -57,17 +57,17 @@ impl EventStream {
 }
 
 impl Stream for EventStream {
-    type Item = RespValue;
-    type Error = RespMsgError;
+    type Item = Result<Response, String>;
+    type Error = ProtocolError;
 
     fn poll(&mut self) -> Result<Async<Option<Self::Item>>, Self::Error> {
         let result = match self.connection.poll() {
             Ok(Async::Ready(Some(item))) => {
-                match FromResp::from_resp(item.clone()) {
-                    Ok(Message::Event(stream_name, number, _)) => {
-                        self.state.entry(stream_name).or_default().position = Some(number.0 + 1);
+                match &item {
+                    Ok(Response::Event { stream, number, .. }) => {
+                        self.state.entry(stream.clone()).or_default().position = Some(number.0 + 1);
                     },
-                    Ok(Message::SubscribedTo { stream }) => {
+                    Ok(Response::Subscribed { stream }) => {
                         // if we were already subscribed to a stream and we are reconnecting
                         // we do not return the message validating a subscription to the user
                         if self.state.get(&stream).map_or(false, |c| c.reconnected) {
@@ -86,18 +86,18 @@ impl Stream for EventStream {
             self.send_stream_subscriptions()?;
         }
 
-        result
+        result.map_err(ProtocolError::ResponseMsgError)
     }
 }
 
 impl Sink for EventStream {
-    type SinkItem = RespValue;
-    type SinkError = RespMsgError;
+    type SinkItem = Request;
+    type SinkError = ProtocolError;
 
     fn start_send(&mut self, item: Self::SinkItem) -> Result<AsyncSink<Self::SinkItem>, Self::SinkError> {
-        if let Ok(Command::Subscribe { streams }) = Command::from_resp(item.clone()) {
+        if let Request::Subscribe { streams } = &item {
             for EsStream { name, from } in streams {
-                self.state.entry(name).or_default().position = from.into();
+                self.state.entry(name.clone()).or_default().position = (*from).into();
             }
         }
 
@@ -107,7 +107,7 @@ impl Sink for EventStream {
             self.send_stream_subscriptions()?;
         }
 
-        result
+        result.map_err(ProtocolError::RequestMsgError)
     }
 
     fn poll_complete(&mut self) -> Result<Async<()>, Self::SinkError> {
@@ -117,7 +117,7 @@ impl Sink for EventStream {
             self.send_stream_subscriptions()?;
         }
 
-        result
+        result.map_err(ProtocolError::RequestMsgError)
     }
 }
 
@@ -132,10 +132,13 @@ pub fn sub_connect(
             let (sender, receiver) = mpsc::unbounded_channel();
 
             let x = receiver
-                .map_err(|e| RespMsgError::IoError(io::Error::new(io::ErrorKind::BrokenPipe, e)))
+                .map_err(|e| {
+                    let error = RespMsgError::IoError(io::Error::new(io::ErrorKind::BrokenPipe, e));
+                    ProtocolError::RequestMsgError(RequestMsgError::RespMsgError(error))
+                })
                 .map(Into::into)
                 .forward(writer)
-                .map_err(|e| error!("{}", e))
+                .map_err(|e| error!("{:?}", e))
                 .map(|_| ());
 
             tokio::spawn(x);
@@ -149,12 +152,12 @@ pub fn sub_connect(
 
 #[derive(Clone)]
 pub struct SubController {
-    sender: mpsc::UnboundedSender<Command>,
+    sender: mpsc::UnboundedSender<Request>,
 }
 
 impl SubController {
     pub fn subscribe_to(&mut self, stream: EsStream) {
-        let command = Command::Subscribe { streams: vec![stream] };
+        let command = Request::Subscribe { streams: vec![stream] };
 
         if let Err(e) = self.sender.try_send(command) {
             error!("{}", e);
@@ -168,29 +171,24 @@ pub struct SubStream {
 
 #[derive(Debug)]
 pub enum ProtocolError {
-    RespMsgError(RespMsgError),
-    RespConvertError(RespMessageConvertError),
+    ResponseMsgError(ResponseMsgError),
+    RequestMsgError(RequestMsgError),
+}
+
+impl fmt::Display for ProtocolError {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        match self {
+            ProtocolError::ResponseMsgError(error) => write!(f, "{}", error),
+            ProtocolError::RequestMsgError(error) => write!(f, "{}", error),
+        }
+    }
 }
 
 impl Stream for SubStream {
-    type Item = Result<Message, String>;
+    type Item = Result<Response, String>;
     type Error = ProtocolError;
 
     fn poll(&mut self) -> Poll<Option<Self::Item>, Self::Error> {
-        use self::ProtocolError::*;
-
-        self.connection
-            .poll()
-            .map_err(RespMsgError)
-            .and_then(|async_| {
-                match async_ {
-                    Async::Ready(Some(v)) => {
-                        let message = FromResp::from_resp(v).map_err(RespConvertError)?;
-                        Ok(Async::Ready(message))
-                    },
-                    Async::Ready(None) => return Ok(Async::Ready(None)),
-                    Async::NotReady => return Ok(Async::NotReady),
-                }
-            })
+        self.connection.poll()
     }
 }

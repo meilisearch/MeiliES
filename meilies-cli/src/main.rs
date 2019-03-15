@@ -6,7 +6,8 @@ use structopt::StructOpt;
 use tokio::prelude::*;
 
 use meilies_client::{sub_connect, paired_connect};
-use meilies::command::Command;
+use meilies::resp::{RespValue, FromResp};
+use meilies::reqresp::Request;
 
 #[derive(Debug, StructOpt)]
 #[structopt(name = "meilies-cli", about = "A basic cli for MeiliES.")]
@@ -34,14 +35,15 @@ fn main() {
         Err(e) => return error!("error parsing addr; {}", e),
     };
 
-    let args = opt.cmd_args.into_iter().map(Into::into).collect();
-    let command = match Command::from_args(args) {
+    let args = opt.cmd_args.into_iter().map(RespValue::bulk_string).collect();
+    let args = RespValue::Array(args);
+    let command = match Request::from_resp(args) {
         Ok(command) => command,
         Err(e) => return error!("{}", e),
     };
 
     let fut = match command {
-        Command::Subscribe { streams } => {
+        Request::Subscribe { streams } => {
             let fut = sub_connect(addr)
                 .map_err(|e| error!("{}", e))
                 .and_then(|(mut ctrl, msgs)| {
@@ -51,7 +53,10 @@ fn main() {
                     }
 
                     msgs.for_each(move |msg| {
-                        println!("{:?}", msg);
+                        match msg {
+                            Ok(response) => println!("{:?}", response),
+                            Err(error) => eprintln!("Error: {}", error),
+                        }
                         future::ok(())
                     })
                     .map_err(|e| error!("{:?}", e))
@@ -63,7 +68,7 @@ fn main() {
 
             Box::new(fut) as Box<dyn Future<Item=(), Error=()> + Send>
         },
-        Command::Publish { stream, event } => {
+        Request::Publish { stream, event } => {
             let fut = paired_connect(addr)
                 .map_err(|e| error!("{}", e))
                 .and_then(|conn| {

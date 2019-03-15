@@ -6,7 +6,7 @@ use futures::stream::{SplitSink, SplitStream};
 use futures::Future;
 use tokio::codec::{Decoder, Framed};
 use tokio::net::TcpStream;
-use meilies::resp::RespCodec;
+use meilies::reqresp::ClientCodec;
 use log::warn;
 
 mod sub;
@@ -17,11 +17,11 @@ pub use self::sub::{sub_connect, SubStream, SubController, ProtocolError};
 pub use self::paired::{paired_connect, PairedConnection};
 pub use self::steel_connection::{retry_strategy, must_retry, SteelConnection};
 
-pub type RespConnection = Framed<TcpStream, RespCodec>;
-pub type RespConnectionWriter = SplitSink<Framed<TcpStream, RespCodec>>;
-pub type RespConnectionReader = SplitStream<Framed<TcpStream, RespCodec>>;
+pub type ClientConnection = Framed<TcpStream, ClientCodec>;
+pub type ClientConnectionWriter = SplitSink<Framed<TcpStream, ClientCodec>>;
+pub type ClientConnectionReader = SplitStream<Framed<TcpStream, ClientCodec>>;
 
-pub fn connect(addr: &SocketAddr) -> impl Future<Item=RespConnection, Error=io::Error> {
+pub fn connect(addr: &SocketAddr) -> impl Future<Item=ClientConnection, Error=io::Error> {
     TcpStream::connect(addr)
         .map(|socket| {
             let duration = Duration::from_millis(50);
@@ -29,6 +29,6 @@ pub fn connect(addr: &SocketAddr) -> impl Future<Item=RespConnection, Error=io::
                 warn!("set_keepalive error; {}", e);
             }
 
-            RespCodec::default().framed(socket)
+            ClientCodec::default().framed(socket)
         })
 }
