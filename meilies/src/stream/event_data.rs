@@ -1,3 +1,4 @@
+use crate::resp::{RespValue, FromResp, RespBytesConvertError};
 use std::{fmt, str};
 
 #[derive(Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
@@ -12,5 +13,18 @@ impl fmt::Debug for EventData {
             Err(_) => dbg.field(event),
         };
         dbg.finish()
+    }
+}
+
+impl FromResp for EventData {
+    type Error = RespBytesConvertError;
+
+    fn from_resp(value: RespValue) -> Result<Self, Self::Error> {
+        match value {
+            RespValue::SimpleString(string) => Ok(EventData(string.into_bytes())),
+            RespValue::Error(string) => Ok(EventData(string.into_bytes())),
+            RespValue::BulkString(bytes) => Ok(EventData(bytes)),
+            _ => Err(RespBytesConvertError::InvalidRespType),
+        }
     }
 }
