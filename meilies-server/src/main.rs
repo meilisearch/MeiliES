@@ -11,15 +11,12 @@ use tokio::net::TcpListener;
 use tokio::prelude::*;
 use tokio::sync::mpsc;
 
-use meilies::reqresp::{Request, RespRequestConvertError};
-use meilies::reqresp::{Response, RespResponseConvertError};
+use meilies::reqresp::{ServerCodec, Request, Response};
+use meilies::reqresp::{RequestMsgError, ResponseMsgError};
 use meilies::stream::{EventData, EventNumber, Stream as EsStream, StartReadFrom};
 use event_id::EventId;
 use meilies::resp::{
-    RespCodec,
     RespMsgError,
-    RespValue,
-    FromResp,
     RespVecConvertError,
     RespBytesConvertError,
 };
@@ -28,18 +25,16 @@ mod event_id;
 
 #[derive(Debug)]
 enum Error<Actual=()> {
-    RespMsgError(RespMsgError),
+    RequestMsgError(RequestMsgError),
     InvalidRequest,
-    RespRequestConvertError(RespRequestConvertError),
     InternalError(sled::Error<Actual>),
 }
 
 impl fmt::Display for Error {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         match self {
-            Error::RespMsgError(e) => write!(f, "invalid RESP message; {}", e),
+            Error::RequestMsgError(e) => write!(f, "invalid request message; {}", e),
             Error::InvalidRequest => write!(f, "invalid request"),
-            Error::RespRequestConvertError(e) => write!(f, "invalid request; {}", e),
             Error::InternalError(e) => write!(f, "internal error; {}", e),
         }
     }
@@ -215,7 +210,7 @@ fn main() {
         .incoming()
         .map_err(|e| error!("error accepting socket; {}", e))
         .for_each(move |socket| {
-            let framed = RespCodec::default().framed(socket);
+            let framed = ServerCodec::default().framed(socket);
             let (writer, reader) = framed.split();
             let (sender, receiver) = mpsc::unbounded_channel();
 
@@ -223,18 +218,15 @@ fn main() {
 
             let db = db.clone();
             let requests = reader
-                .map_err(Error::RespMsgError)
-                .and_then(|value| {
-                    Command::from_resp(value).map_err(Error::RespCommandConvertError)
-                })
-                .for_each(move |command| {
+                .map_err(Error::RequestMsgError)
+                .for_each(move |request| {
                     let db = db.clone();
                     let sender = sender.clone();
-                    future::result(handle_command(command, db, sender))
+                    future::result(handle_request(request, db, sender))
                 })
                 .or_else(move |error| {
                     error!("error; {}", error);
-                    if error_sender.start_send(RespValue::error(error)).is_err() {
+                    if error_sender.start_send(Err(error.to_string())).is_err() {
                         info!("encountered closed channel");
                     }
 
@@ -242,17 +234,23 @@ fn main() {
                 });
 
             let responses = receiver
-                .map_err(|e| RespMsgError::IoError(io::Error::new(io::ErrorKind::BrokenPipe, e)))
+                .map_err(|e| {
+                    let error = RespMsgError::IoError(io::Error::new(io::ErrorKind::BrokenPipe, e));
+                    ResponseMsgError::RespMsgError(error)
+                })
                 .forward(writer)
                 .map_err(|error| {
+                    use ResponseMsgError::RespMsgError;
+                    use crate::RespMsgError::IoError;
+
                     match error {
-                        RespMsgError::IoError(ref e) if e.kind() == io::ErrorKind::BrokenPipe => {
+                        RespMsgError(IoError(ref e)) if e.kind() == io::ErrorKind::BrokenPipe => {
                             info!("{}", e);
                         },
                         other => error!("{}", other),
                     }
                 })
-                .map(|_| ());
+                .map(drop);
 
             tokio::spawn(requests);
             tokio::spawn(responses);
