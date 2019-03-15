@@ -61,22 +61,22 @@ impl Stream for SteelConnection {
         match &mut self.conn_state {
             ConnState::Connected(connection) => {
                 match connection.poll() {
-                    Ok(Async::Ready(Some(item))) => Ok(Async::Ready(Some(item))),
                     Ok(Async::Ready(None)) => {
                         error!("Connection closed with {}", self.addr);
                         self.conn_state = ConnState::Connecting(retry_future(self.addr));
                         self.poll()
                     },
-                    Ok(Async::NotReady) => Ok(Async::NotReady),
                     Err(error) => {
                         match error {
                             RespMsgError::IoError(ref e) if must_retry(e) => {
+                                error!("Connection error with {}; {}", self.addr, e);
                                 self.conn_state = ConnState::Connecting(retry_future(self.addr));
                                 self.poll()
                             },
                             otherwise => Err(otherwise),
                         }
                     },
+                    otherwise => otherwise,
                 }
             },
             ConnState::Connecting(connect) => {
@@ -102,8 +102,9 @@ impl Sink for SteelConnection {
     fn start_send(&mut self, item: Self::SinkItem) -> Result<AsyncSink<Self::SinkItem>, Self::SinkError> {
         match &mut self.conn_state {
             ConnState::Connected(connection) => {
-                connection.start_send(item) // TODO check if that can be done
-                // unimplemented!()
+                // `start_send` can't trigger any network error. As the name suggests,
+                // this method only _begins_ the process of sending the item.
+                connection.start_send(item)
             },
             ConnState::Connecting(connect) => {
                 match connect.poll() {
@@ -123,8 +124,19 @@ impl Sink for SteelConnection {
     fn poll_complete(&mut self) -> Result<Async<()>, Self::SinkError> {
         match &mut self.conn_state {
             ConnState::Connected(connection) => {
-                connection.poll_complete() // TODO check if that can be done
-                // unimplemented!()
+                match connection.poll_complete() {
+                    Err(error) => {
+                        match error {
+                            RespMsgError::IoError(ref e) if must_retry(e) => {
+                                error!("Connection error with {}; {}", self.addr, e);
+                                self.conn_state = ConnState::Connecting(retry_future(self.addr));
+                                self.poll_complete()
+                            },
+                            otherwise => Err(otherwise),
+                        }
+                    },
+                    otherwise => otherwise,
+                }
             },
             ConnState::Connecting(connect) => {
                 match connect.poll() {
