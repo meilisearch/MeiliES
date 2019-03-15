@@ -11,8 +11,9 @@ use tokio::net::TcpListener;
 use tokio::prelude::*;
 use tokio::sync::mpsc;
 
-use meilies::command::{Command, RespCommandConvertError};
-use meilies::stream::{Message, EventData, EventNumber, Stream as EsStream, StartReadFrom};
+use meilies::reqresp::{Request, RespRequestConvertError};
+use meilies::reqresp::{Response, RespResponseConvertError};
+use meilies::stream::{EventData, EventNumber, Stream as EsStream, StartReadFrom};
 use event_id::EventId;
 use meilies::resp::{
     RespCodec,
@@ -29,7 +30,7 @@ mod event_id;
 enum Error<Actual=()> {
     RespMsgError(RespMsgError),
     InvalidRequest,
-    RespCommandConvertError(RespCommandConvertError),
+    RespRequestConvertError(RespRequestConvertError),
     InternalError(sled::Error<Actual>),
 }
 
@@ -38,7 +39,7 @@ impl fmt::Display for Error {
         match self {
             Error::RespMsgError(e) => write!(f, "invalid RESP message; {}", e),
             Error::InvalidRequest => write!(f, "invalid request"),
-            Error::RespCommandConvertError(e) => write!(f, "invalid command; {}", e),
+            Error::RespRequestConvertError(e) => write!(f, "invalid request; {}", e),
             Error::InternalError(e) => write!(f, "internal error; {}", e),
         }
     }
@@ -59,7 +60,7 @@ impl<Actual> From<RespVecConvertError<RespBytesConvertError>> for Error<Actual> 
 fn send_stream_events(
     stream: EsStream,
     tree: Arc<Tree>,
-    mut sender: mpsc::UnboundedSender<RespValue>,
+    mut sender: mpsc::UnboundedSender<Result<Response, String>>,
 ) -> sled::Result<(), ()>
 {
     info!("spawning a blocking subscription for {}", stream);
@@ -93,11 +94,13 @@ fn send_stream_events(
             };
 
             if is_accepted {
-                let event = Message::Event(stream.name.clone(), EventNumber(event_number), EventData(value.to_vec()));
-                let event = event.into();
+                let stream = stream.name.clone();
+                let number = EventNumber(event_number);
+                let event = EventData(value.to_vec());
+                let event = Response::Event { stream, number, event };
 
                 // the only possible error is a closed channel
-                if sender.start_send(event).is_err() {
+                if sender.start_send(Ok(event)).is_err() {
                     info!("encountered closed channel");
                     break
                 }
@@ -116,11 +119,13 @@ fn send_stream_events(
             };
 
             if is_accepted {
-                let event = Message::Event(stream.name.clone(), EventNumber(event_number), EventData(value));
-                let event = event.into();
+                let stream = stream.name.clone();
+                let number = EventNumber(event_number);
+                let event = EventData(value);
+                let event = Response::Event { stream, number, event };
 
                 // the only possible error is a closed channel
-                if sender.start_send(event).is_err() {
+                if sender.start_send(Ok(event)).is_err() {
                     info!("encountered closed channel");
                     break
                 }
@@ -133,23 +138,21 @@ fn send_stream_events(
     Ok(())
 }
 
-fn handle_command(
-    command: Command,
+fn handle_request(
+    request: Request,
     db: Db,
-    mut sender: mpsc::UnboundedSender<RespValue>
+    mut sender: mpsc::UnboundedSender<Result<Response, String>>
 ) -> Result<(), Error>
 {
-    match command {
-        Command::Subscribe { streams } => {
+    match request {
+        Request::Subscribe { streams } => {
             for stream in streams {
                 let mut sender = sender.clone();
 
                 let tree = db.open_tree(stream.name.clone().into_bytes())?;
 
-                let subscribed = Message::SubscribedTo { stream: stream.name.clone() };
-                let subscribed = subscribed.into();
-
-                if sender.start_send(subscribed).is_err() {
+                let subscribed = Response::Subscribed { stream: stream.name.clone() };
+                if sender.start_send(Ok(subscribed)).is_err() {
                     info!("encountered closed channel");
                 }
 
@@ -160,7 +163,7 @@ fn handle_command(
 
                     tokio_threadpool::blocking(move || {
                         if let Err(e) = send_stream_events(stream, tree, sender.clone()) {
-                            if sender.start_send(RespValue::error(e)).is_err() {
+                            if sender.start_send(Err(e.to_string())).is_err() {
                                 info!("encountered closed channel");
                             }
                         }
@@ -169,7 +172,7 @@ fn handle_command(
                 }));
             }
         },
-        Command::Publish { stream, event } => {
+        Request::Publish { stream, event } => {
             let tree = db.open_tree(stream.into_bytes())?;
             let event_id = EventId::from(db.generate_id()?);
 
@@ -177,7 +180,7 @@ fn handle_command(
                 return Err(Error::InternalError(e))
             }
 
-            if sender.start_send(RespValue::string("OK")).is_err() {
+            if sender.start_send(Ok(Response::Ok)).is_err() {
                 info!("encountered closed channel");
             }
         }
