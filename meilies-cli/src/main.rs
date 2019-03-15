@@ -87,7 +87,7 @@ fn main() {
                         .map_err(|e| error!("{}", e))
                 })
                 .map(|(stream, number, _conn)| {
-                    println!("{:?} - {:?}", stream, number)
+                    println!("{} - {:?}", stream, number)
                 });
 
             Box::new(fut) as Box<dyn Future<Item=(), Error=()> + Send>

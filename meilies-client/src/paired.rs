@@ -2,17 +2,20 @@ use std::net::SocketAddr;
 use std::{fmt, io};
 
 use futures::{Future, Stream, Sink};
+use tokio_retry::RetryIf;
+use log::warn;
 use meilies::stream::{StreamName, EventNumber, EventData};
 use meilies::reqresp::{Request, RequestMsgError};
 use meilies::reqresp::{Response, ResponseMsgError};
 
+use crate::steel_connection::{must_retry, retry_strategy};
 use super::{connect, SteelConnection};
 
-pub fn paired_connect(addr: SocketAddr) -> impl Future<Item=PairedConnection, Error=io::Error> {
-    connect(&addr)
-        .map(move |connection| {
-            PairedConnection::new(SteelConnection::new(addr, connection))
-        })
+pub fn paired_connect(
+    addr: SocketAddr
+) -> impl Future<Item=PairedConnection, Error=tokio_retry::Error<io::Error>>
+{
+    PairedConnection::connect(addr)
 }
 
 pub struct PairedConnection {
@@ -45,8 +48,15 @@ impl fmt::Display for PairedConnectionError {
 }
 
 impl PairedConnection {
-    pub fn new(connection: SteelConnection) -> PairedConnection {
-        PairedConnection { connection }
+    pub fn connect(addr: SocketAddr) -> impl Future<Item=PairedConnection, Error=tokio_retry::Error<io::Error>> {
+        RetryIf::spawn(retry_strategy(), move || {
+            warn!("Connecting to {}", addr);
+            connect(&addr)
+                .map(move |connection| {
+                    let connection = SteelConnection::new(addr, connection);
+                    PairedConnection { connection }
+                })
+        }, must_retry)
     }
 
     pub fn publish(
