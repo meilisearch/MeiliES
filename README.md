@@ -41,10 +41,10 @@ And in another one again you can send new events.
 All clients which are subscribed to that same stream will see the events.
 
 ```bash
-meilies-cli publish 'my-little-stream' 'Hello World!'
-meilies-cli publish 'my-little-stream' 'Hello Cathy!'
-meilies-cli publish 'my-little-stream' 'Hello Kevin!'
-meilies-cli publish 'my-little-stream' 'Hello Donut!'
+meilies-cli publish 'my-little-stream' 'my-event-name' 'Hello World!'
+meilies-cli publish 'my-little-stream' 'my-event-name' 'Hello Cathy!'
+meilies-cli publish 'my-little-stream' 'my-event-name' 'Hello Kevin!'
+meilies-cli publish 'my-little-stream' 'my-event-name' 'Hello Donut!'
 ```
 
 But that is not a really interresting usage of Event Sourcing, right?!

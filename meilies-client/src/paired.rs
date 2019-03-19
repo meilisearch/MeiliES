@@ -4,7 +4,7 @@ use std::{fmt, io};
 use futures::{Future, Stream, Sink};
 use tokio_retry::RetryIf;
 use log::warn;
-use meilies::stream::{StreamName, EventNumber, EventData};
+use meilies::stream::{StreamName, EventNumber, EventData, EventName};
 use meilies::reqresp::{Request, RequestMsgError};
 use meilies::reqresp::{Response, ResponseMsgError};
 
@@ -62,13 +62,13 @@ impl PairedConnection {
     pub fn publish(
         self,
         stream: StreamName,
-        event: Vec<u8>
+        event_name: EventName,
+        event_data: EventData,
     ) -> impl Future<Item=PairedConnection, Error=PairedConnectionError>
     {
         use PairedConnectionError::*;
 
-        let event = EventData(event);
-        let command = Request::Publish { stream, event };
+        let command = Request::Publish { stream, event_name, event_data };
 
         self.connection
             .send(command)
