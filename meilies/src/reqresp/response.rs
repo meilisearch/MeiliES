@@ -1,12 +1,12 @@
 use std::fmt;
-use crate::stream::{StreamName, EventNumber, EventData};
+use crate::stream::{StreamName, EventNumber, EventData, EventName};
 use crate::resp::{RespValue, FromResp};
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Response {
     Ok,
     Subscribed { stream: StreamName },
-    Event { stream: StreamName, number: EventNumber, event: EventData },
+    Event { stream: StreamName, number: EventNumber, event_name: EventName, event_data: EventData },
     LastEventNumber { stream: StreamName, number: Option<EventNumber> },
 }
 
@@ -22,12 +22,13 @@ impl Into<RespValue> for Response {
                     RespValue::string(stream),
                 ])
             },
-            Response::Event { stream, number, event } => {
+            Response::Event { stream, number, event_name, event_data } => {
                 RespValue::Array(vec![
                     RespValue::string("event"),
                     RespValue::string(stream),
                     RespValue::Integer(number.0 as i64),
-                    RespValue::bulk_string(event.0),
+                    RespValue::string(event_name),
+                    RespValue::bulk_string(event_data.0),
                 ])
             },
             Response::LastEventNumber { stream, number } => {
@@ -107,7 +108,11 @@ impl FromResp for Response {
                     .ok_or(MissingArgument)?
                     .map_err(|_| InvalidArgumentRespType)?;
 
-                let event = iter.next().map(EventData::from_resp)
+                let event_name = iter.next().map(EventName::from_resp)
+                        .ok_or(MissingArgument)?
+                        .map_err(|_| InvalidArgumentRespType)?;
+
+                let event_data = iter.next().map(EventData::from_resp)
                     .ok_or(MissingArgument)?
                     .map_err(|_| InvalidArgumentRespType)?;
 
@@ -115,7 +120,7 @@ impl FromResp for Response {
                     return Err(TooManyArguments)
                 }
 
-                Ok(Response::Event { stream, number, event })
+                Ok(Response::Event { stream, number, event_name, event_data })
             },
             "last-event-number" => {
                 let stream = iter.next().map(StreamName::from_resp)

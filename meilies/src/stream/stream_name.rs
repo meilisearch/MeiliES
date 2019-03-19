@@ -35,7 +35,7 @@ impl StreamName {
 
 impl fmt::Display for StreamName {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-        f.write_str(self.as_str())
+        self.0.fmt(f)
     }
 }
 

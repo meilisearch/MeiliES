@@ -1,7 +1,8 @@
 use std::ops::{Bound::Excluded, Bound::Unbounded};
 use std::sync::Arc;
 use std::time::Instant;
-use std::{env, io, fmt};
+use std::{env, fmt};
+use std::io::{Error as IoError, ErrorKind};
 
 use futures::future::poll_fn;
 use log::{info, error};
@@ -13,7 +14,7 @@ use tokio::sync::mpsc;
 
 use meilies::reqresp::{ServerCodec, Request, Response};
 use meilies::reqresp::{RequestMsgError, ResponseMsgError};
-use meilies::stream::{EventData, EventNumber, Stream as EsStream, StartReadFrom};
+use meilies::stream::{RawEvent, EventNumber, Stream as EsStream, StartReadFrom};
 use event_id::EventId;
 use meilies::resp::{
     RespMsgError,
@@ -91,8 +92,16 @@ fn send_stream_events(
             if is_accepted {
                 let stream = stream.name.clone();
                 let number = EventNumber(event_number);
-                let event = EventData(value.to_vec());
-                let event = Response::Event { stream, number, event };
+                let event = RawEvent::new(value.to_vec());
+                let event_name = match event.name() {
+                    Ok(name) => name,
+                    Err(err) => {
+                        error!("impossible to parse the event name; {}", err);
+                        return Err(IoError::new(ErrorKind::InvalidData, err.to_string()).into())
+                    }
+                };
+                let event_data = event.data();
+                let event = Response::Event { stream, number, event_name, event_data };
 
                 // the only possible error is a closed channel
                 if sender.start_send(Ok(event)).is_err() {
@@ -116,8 +125,17 @@ fn send_stream_events(
             if is_accepted {
                 let stream = stream.name.clone();
                 let number = EventNumber(event_number);
-                let event = EventData(value);
-                let event = Response::Event { stream, number, event };
+
+                let event = RawEvent::new(value);
+                let event_name = match event.name() {
+                    Ok(name) => name,
+                    Err(err) => {
+                        error!("impossible to parse the event name; {}", err);
+                        return Err(IoError::new(ErrorKind::InvalidData, err.to_string()).into())
+                    }
+                };
+                let event_data = event.data();
+                let event = Response::Event { stream, number, event_name, event_data };
 
                 // the only possible error is a closed channel
                 if sender.start_send(Ok(event)).is_err() {
@@ -167,11 +185,20 @@ fn handle_request(
                 }));
             }
         },
-        Request::Publish { stream, event } => {
+        Request::Publish { stream, event_name, event_data } => {
             let tree = db.open_tree(stream.into_bytes())?;
             let event_id = EventId::from(db.generate_id()?);
 
-            if let Err(e) = tree.set(event_id, event.0) {
+            let raw_length = event_name.as_str().len().to_be_bytes();
+            let raw_name = event_name.as_str().as_bytes();
+            let raw_data = event_data.0;
+
+            let mut raw_event = Vec::new();
+            raw_event.extend_from_slice(&raw_length);
+            raw_event.extend_from_slice(&raw_name);
+            raw_event.extend_from_slice(&raw_data);
+
+            if let Err(e) = tree.set(event_id, raw_event) {
                 return Err(Error::InternalError(e))
             }
 
@@ -244,7 +271,7 @@ fn main() {
 
             let responses = receiver
                 .map_err(|e| {
-                    let error = RespMsgError::IoError(io::Error::new(io::ErrorKind::BrokenPipe, e));
+                    let error = RespMsgError::IoError(IoError::new(ErrorKind::BrokenPipe, e));
                     ResponseMsgError::RespMsgError(error)
                 })
                 .forward(writer)
@@ -253,7 +280,7 @@ fn main() {
                     use crate::RespMsgError::IoError;
 
                     match error {
-                        RespMsgError(IoError(ref e)) if e.kind() == io::ErrorKind::BrokenPipe => {
+                        RespMsgError(IoError(ref e)) if e.kind() == ErrorKind::BrokenPipe => {
                             info!("{}", e);
                         },
                         other => error!("{}", other),

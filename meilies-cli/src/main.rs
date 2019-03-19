@@ -68,11 +68,11 @@ fn main() {
 
             Box::new(fut) as Box<dyn Future<Item=(), Error=()> + Send>
         },
-        Request::Publish { stream, event } => {
+        Request::Publish { stream, event_name, event_data } => {
             let fut = paired_connect(addr)
                 .map_err(|e| error!("{}", e))
                 .and_then(|conn| {
-                    conn.publish(stream, event.0)
+                    conn.publish(stream, event_name, event_data)
                         .map_err(|e| error!("{}", e))
                 })
                 .map(|_conn| println!("Event sent to the stream"));
