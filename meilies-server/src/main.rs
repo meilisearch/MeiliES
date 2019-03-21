@@ -1,12 +1,15 @@
+use std::fmt;
+use std::io::{Error as IoError, ErrorKind};
+use std::net::SocketAddr;
 use std::ops::{Bound::Excluded, Bound::Unbounded};
+use std::path::PathBuf;
 use std::sync::Arc;
 use std::time::Instant;
-use std::{env, fmt};
-use std::io::{Error as IoError, ErrorKind};
 
 use futures::future::poll_fn;
 use log::{info, error};
 use sled::{Db, Tree, Event};
+use structopt::StructOpt;
 use tokio::codec::Decoder;
 use tokio::net::TcpListener;
 use tokio::prelude::*;
@@ -23,6 +26,22 @@ use meilies::resp::{
 };
 
 mod event_id;
+
+#[derive(Debug, StructOpt)]
+#[structopt(name = "meilies-server", about = "Start the server")]
+struct Opt {
+    /// Server hostname.
+    #[structopt(short = "h", long = "hostname", default_value = "127.0.0.1")]
+    hostname: String,
+
+    /// Server port.
+    #[structopt(short = "p", long = "port", default_value = "6480")]
+    port: u16,
+
+    /// Database path
+    #[structopt(long = "db-path", parse(from_os_str), default_value = "/var/lib/meilies")]
+    db_path: PathBuf,
+}
 
 #[derive(Debug)]
 enum Error<Actual=()> {
@@ -222,15 +241,17 @@ fn handle_request(
 
 fn main() {
     let _ = env_logger::init();
+    let opt = Opt::from_args();
 
-    let addr = env::args().nth(1).unwrap_or("127.0.0.1:6480".into());
-    let addr = match addr.parse() {
+    let addr = match opt.hostname.parse() {
         Ok(addr) => addr,
-        Err(e) => return error!("error parsing addr {:?}; {}", addr, e),
+        Err(e) => return error!("error parsing addr {:?}; {}", opt.hostname, e),
     };
 
+    let addr = SocketAddr::new(addr, opt.port);
+
     let now = Instant::now();
-    let db = match Db::start_default("test-db") {
+    let db = match Db::start_default(opt.db_path) {
         Ok(db) => db,
         Err(e) => return error!("error opening database; {}", e),
     };
