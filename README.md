@@ -31,7 +31,7 @@
 ## Introduction
 
 MeiliES is an _Event Sourcing database_ that uses the _RESP_ (REdis Serialization Protocol) to communicate.
-This way it is possible to create clients by reusing the already available protocol. For example, it is possible to use [the official Redis command line interface](https://redis.io/topics/rediscli) program to communicate with MeiliES.
+This way it is possible to create clients by reusing the already available protocol. For example, it is possible to use [the official Redis command line interface](https://redis.io/topics/rediscli) program to communicate with MeiliES. There is [a release blog post](https://blog.meilisearch.com/meilies-release/) if you want to know more.
 
 An event store is like a Kafka or a Rabbit MQ but it stores events on disk indefinitely. The first purpose of the server is to publish events of a stream to all subscribed clients, note that events are saved in reception order. A client can also specify from which event number (incrementing) it wants to read, therefore it is possible to recover from crashing by reading and reconstructing a state with only new events.
 
