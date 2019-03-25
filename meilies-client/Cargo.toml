@@ -1,5 +1,9 @@
 [package]
 name = "meilies-client"
+description = "A TCP client for MeiliES"
+license = "MIT"
+documentation = "https://docs.rs/meilies-client"
+repository = "https://github.com/meilisearch/MeiliES"
 version = "0.1.0"
 authors = ["Kerollmops <renault.cle@gmail.com>"]
 edition = "2018"
