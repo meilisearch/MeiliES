@@ -19,12 +19,12 @@
 </p>
 
 <p align="center">
-  <a href="https://crates.io/crates/meilies">
-    <img alt="MeiliES crate" src="https://img.shields.io/crates/v/meilies.svg">
+  <a href="https://crates.io/crates/meilies-client">
+    <img alt="meilies-client crate" src="https://img.shields.io/crates/v/meilies-client.svg">
   </a>
 
-  <a href="https://docs.rs/meilies">
-    <img alt="MeiliES documentation" src="https://docs.rs/meilies/badge.svg">
+  <a href="https://docs.rs/meilies-client">
+    <img alt="meilies-client documentation" src="https://docs.rs/meilies-client/badge.svg">
   </a>
 </p>
 
