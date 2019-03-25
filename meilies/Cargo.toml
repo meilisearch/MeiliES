@@ -1,5 +1,9 @@
 [package]
 name = "meilies"
+description = "The RESP and MeiliES protocol types"
+license = "MIT"
+documentation = "https://docs.rs/meilies"
+repository = "https://github.com/meilisearch/MeiliES"
 version = "0.1.0"
 authors = ["Kerollmops <renault.cle@gmail.com>"]
 edition = "2018"
