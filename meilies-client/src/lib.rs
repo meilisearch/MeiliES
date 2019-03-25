@@ -15,12 +15,13 @@ mod steel_connection;
 
 pub use self::sub::{sub_connect, SubStream, SubController, ProtocolError};
 pub use self::paired::{paired_connect, PairedConnection};
-pub use self::steel_connection::{retry_strategy, must_retry, SteelConnection};
+use self::steel_connection::{retry_strategy, must_retry, SteelConnection};
 
 pub type ClientConnection = Framed<TcpStream, ClientCodec>;
 pub type ClientConnectionWriter = SplitSink<Framed<TcpStream, ClientCodec>>;
 pub type ClientConnectionReader = SplitStream<Framed<TcpStream, ClientCodec>>;
 
+/// Open a framed connection with a server using RESP
 pub fn connect(addr: &SocketAddr) -> impl Future<Item=ClientConnection, Error=io::Error> {
     TcpStream::connect(addr)
         .map(|socket| {

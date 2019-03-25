@@ -9,6 +9,9 @@ use tokio_retry::Error as TrError;
 
 use super::{connect, ClientConnection};
 
+/// A connection that try to reconnect when disconnected.
+///
+/// It will keep the stream states (e.g. the stream position).
 pub struct SteelConnection {
     addr: SocketAddr,
     reconnected: bool,
@@ -21,6 +24,7 @@ enum ConnState {
 }
 
 impl SteelConnection {
+    /// Create a new steel connection.
     pub fn new(addr: SocketAddr, connection: ClientConnection) -> SteelConnection {
         SteelConnection { addr, reconnected: false, conn_state: ConnState::Connected(connection) }
     }
@@ -31,10 +35,12 @@ impl SteelConnection {
     }
 }
 
+/// The retry strategy used to reconnect.
 pub fn retry_strategy() -> std::iter::Take<FibonacciBackoff> {
     FibonacciBackoff::from_millis(100).take(50)
 }
 
+/// The conditions to try a reconnection.
 pub fn must_retry(e: &io::Error) -> bool {
     use io::ErrorKind::*;
     e.kind() == BrokenPipe || e.kind() == ConnectionRefused
