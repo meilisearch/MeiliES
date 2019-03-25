@@ -35,7 +35,7 @@ This way it is possible to create clients by reusing the already available proto
 
 An event store is like a Kafka or a Rabbit MQ but it stores events on disk indefinitely. The first purpose of the server is to publish events of a stream to all subscribed clients, note that events are saved in reception order. A client can also specify from which event number (incrementing) it wants to read, therefore it is possible to recover from crashing by reading and reconstructing a state with only new events.
 
-[![MeiliES demo](https://asciinema.org/a/2o58381Fy9C4nk9yNg3EHjwH1.svg)](https://asciinema.org/a/2o58381Fy9C4nk9yNg3EHjwH1?speed=2)
+[![MeiliES demo](https://asciinema.org/a/2o58381Fy9C4nk9yNg3EHjwH1.svg)](https://asciinema.org/a/2o58381Fy9C4nk9yNg3EHjwH1?speed=2&autoplay=1)
 
 ## Features
 
