@@ -13,10 +13,11 @@ An event store is like a Kafka or a Rabbit MQ but it stores events on disk indef
 
 ### Features
 
-- Full Rust, using [sled as the internal storage](http://sled.rs)
-- Redis based protocol
-- TCP stream subscriptions from an optional event number
 - Event publication
+- TCP stream subscriptions from an optional event number
+- Resilient connections (reconnecting when closed)
+- Redis based protocol
+- Full Rust, using [sled as the internal storage](http://sled.rs)
 - Takes near 2min to compile
 
 ### Building MeiliES
@@ -36,7 +37,7 @@ cargo install --path meilies-cli
 Once MeiliES is installed and available in your `PATH`, you can run it by executing the following command.
 
 ```bash
-meilies-server
+meilies-server --db-path my-little-db.edb
 ```
 
 There is now a MeiliES server running on your machine and listening on `127.0.0.1:6480`.
