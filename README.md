@@ -6,11 +6,20 @@
 [![Rust 1.33+](https://img.shields.io/badge/rust-1.33+-lightgray.svg)](
 https://www.rust-lang.org)
 
-MeiliES is an _Event Sourcing database_ that uses the **RESP** (REdis Serialization Protocol) to communicate.
+MeiliES is an _Event Sourcing database_ that uses the _RESP_ (REdis Serialization Protocol) to communicate.
 This way it is possible to create clients by reusing the already available protocol.
-For example it is possible to use [the official Redis command line interface] program to communicate with MeiliES.
 
-## Building MeiliES
+An event store is like a Kafka or a Rabbit MQ but it stores events on disk indefinitely. The first purpose of the server is to publish events of a stream to all subscribed clients, note that events are saved in reception order. A client can also specify from which event number (incrementing) it wants to read, therefore it is possible to recover from crashing by reading and reconstructing a state with only new events.
+
+### Features
+
+- Full Rust, using [sled as the internal storage](http://sled.rs)
+- Redis based protocol
+- TCP stream subscriptions from an optional event number
+- Event publication
+- Takes near 2min to compile
+
+### Building MeiliES
 
 To run MeiliES you will need Rust, you can install it by following the steps on https://rustup.rs.
 Once you have Rust in your `PATH` you can clone and build the MeiliES binaries.
@@ -81,6 +90,8 @@ meilies-cli subscribe 'my-little-stream:5'
 
 The current implementation has some limitations related to the whole number of streams subscribed. The problem is that one thread is spawn for each stream and for each client. For example, if two clients subscribe to the same stream, the server will spawn two threads, one for each client instead of spawning only one thread and sending new events to a clients pool.
 
-Even uglier, if a client is closing the connection, the spawned threads will not stop immediatly but after some stream activity.
+Even uglier, if a client is closing the connection, the spawned threads will not stop immediately but after some stream activity.
 
-[the official Redis command line interface]: https://redis.io/topics/rediscli
+## Support
+
+For commercial support, drop us an email at bonjour@meilisearch.com.
