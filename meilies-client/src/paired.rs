@@ -11,6 +11,7 @@ use meilies::reqresp::{Response, ResponseMsgError};
 use crate::steel_connection::{must_retry, retry_strategy};
 use super::{connect, SteelConnection};
 
+/// Open a framed paired connection with a server.
 pub fn paired_connect(
     addr: SocketAddr
 ) -> impl Future<Item=PairedConnection, Error=tokio_retry::Error<io::Error>>
@@ -18,6 +19,8 @@ pub fn paired_connect(
     PairedConnection::connect(addr)
 }
 
+/// A paired connection returns a response to each message send, it is sequential.
+/// This connection is used to publish events to streams.
 pub struct PairedConnection {
     connection: SteelConnection,
 }
@@ -48,6 +51,7 @@ impl fmt::Display for PairedConnectionError {
 }
 
 impl PairedConnection {
+    /// Open a framed paired connection with a server.
     pub fn connect(addr: SocketAddr) -> impl Future<Item=PairedConnection, Error=tokio_retry::Error<io::Error>> {
         RetryIf::spawn(retry_strategy(), move || {
             warn!("Connecting to {}", addr);
@@ -59,6 +63,7 @@ impl PairedConnection {
         }, must_retry)
     }
 
+    /// Publish an event to a stream, specifying the event name and data.
     pub fn publish(
         self,
         stream: StreamName,
@@ -83,6 +88,9 @@ impl PairedConnection {
             })
     }
 
+    /// Request the last event number that the stream is at.
+    ///
+    /// Returns `None` if the stream does not contain any event.
     pub fn last_event_number(
         self,
         stream: StreamName

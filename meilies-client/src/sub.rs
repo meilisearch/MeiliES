@@ -19,6 +19,9 @@ struct StreamContext {
     position: Option<u64>,
 }
 
+/// A tokio Stream that reconnect when the connection is lost.
+///
+/// It preferable to use `sub_connect` to get a `SubController` and `SubStream` tuple.
 pub struct EventStream {
     state: HashMap<StreamName, StreamContext>,
     connection: SteelConnection,
@@ -121,6 +124,7 @@ impl Sink for EventStream {
     }
 }
 
+/// Open a sup connection with a server.
 pub fn sub_connect(
     addr: SocketAddr
 ) -> impl Future<Item=(SubController, SubStream), Error=tokio_retry::Error<io::Error>>
@@ -150,12 +154,14 @@ pub fn sub_connect(
         })
 }
 
+/// A sub controller control which streams to connect to.
 #[derive(Clone)]
 pub struct SubController {
     sender: mpsc::UnboundedSender<Request>,
 }
 
 impl SubController {
+    /// Ask the server to send events of the given stream.
     pub fn subscribe_to(&mut self, stream: EsStream) {
         let command = Request::Subscribe { streams: vec![stream] };
 
@@ -165,6 +171,7 @@ impl SubController {
     }
 }
 
+/// A tokio Stream that returns every event received on all subscribed streams.
 pub struct SubStream {
     connection: SplitStream<EventStream>,
 }
