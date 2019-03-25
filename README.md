@@ -1,17 +1,41 @@
-# MeiliES
+<p align="center">
+  <img alt="meilies" src="https://user-images.githubusercontent.com/3610253/54926921-925b3500-4f11-11e9-8cbc-0f287f48108a.png" width="230">
+</p>
 
-[![Build Status](https://dev.azure.com/thomas0884/thomas/_apis/build/status/meilisearch.MeiliES?branchName=master)](https://dev.azure.com/thomas0884/thomas/_build/latest?definitionId=10&branchName=master)
-[![dependency status](https://deps.rs/repo/github/meilisearch/MeiliES/status.svg)](https://deps.rs/repo/github/meilisearch/MeiliES)
-[![License](https://img.shields.io/github/license/meilisearch/MeiliES.svg)](https://github.com/meilisearch/MeiliES)
-[![Rust 1.33+](https://img.shields.io/badge/rust-1.33+-lightgray.svg)](
-https://www.rust-lang.org)
+<h3 align="center">MeiliES</h3>
+
+<p align="center">
+  A Rust based event store using the Redis protocol
+</p>
+
+<p align="center">
+  <a href="https://dev.azure.com/thomas0884/thomas/_build/latest?definitionId=10&branchName=master">
+    <img alt="Build Status" src="https://dev.azure.com/thomas0884/thomas/_apis/build/status/meilisearch.MeiliES?branchName=master">
+  </a>
+
+  <a href="https://deps.rs/repo/github/meilisearch/MeiliES">
+    <img alt="Dependency Status" src="https://deps.rs/repo/github/meilisearch/MeiliES/status.svg">
+  </a>
+</p>
+
+<p align="center">
+  <a href="https://crates.io/crates/meilies">
+    <img alt="MeiliES crate" src="https://img.shields.io/crates/v/meilies.svg">
+  </a>
+
+  <a href="https://docs.rs/meilies">
+    <img alt="MeiliES documentation" src="https://docs.rs/meilies/badge.svg">
+  </a>
+</p>
+
+# Introduction
 
 MeiliES is an _Event Sourcing database_ that uses the _RESP_ (REdis Serialization Protocol) to communicate.
 This way it is possible to create clients by reusing the already available protocol. For example it is possible to use [the official Redis command line interface](https://redis.io/topics/rediscli) program to communicate with MeiliES.
 
 An event store is like a Kafka or a Rabbit MQ but it stores events on disk indefinitely. The first purpose of the server is to publish events of a stream to all subscribed clients, note that events are saved in reception order. A client can also specify from which event number (incrementing) it wants to read, therefore it is possible to recover from crashing by reading and reconstructing a state with only new events.
 
-### Features
+## Features
 
 - Event publication
 - TCP stream subscriptions from an optional event number
@@ -20,7 +44,7 @@ An event store is like a Kafka or a Rabbit MQ but it stores events on disk indef
 - Full Rust, using [sled as the internal storage](http://sled.rs)
 - Takes near 2min to compile
 
-### Building MeiliES
+## Building MeiliES
 
 To run MeiliES you will need Rust, you can install it by following the steps on https://rustup.rs.
 Once you have Rust in your `PATH` you can clone and build the MeiliES binaries.
