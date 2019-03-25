@@ -44,10 +44,10 @@ struct Opt {
 }
 
 #[derive(Debug)]
-enum Error<Actual=()> {
+enum Error {
     RequestMsgError(RequestMsgError),
     InvalidRequest,
-    InternalError(sled::Error<Actual>),
+    InternalError(sled::Error),
 }
 
 impl fmt::Display for Error {
@@ -60,14 +60,14 @@ impl fmt::Display for Error {
     }
 }
 
-impl<A> From<sled::Error<A>> for Error<A> {
-    fn from(error: sled::Error<A>) -> Error<A> {
+impl From<sled::Error> for Error {
+    fn from(error: sled::Error) -> Error {
         Error::InternalError(error)
     }
 }
 
-impl<Actual> From<RespVecConvertError<RespBytesConvertError>> for Error<Actual> {
-    fn from(_: RespVecConvertError<RespBytesConvertError>) -> Error<Actual> {
+impl From<RespVecConvertError<RespBytesConvertError>> for Error {
+    fn from(_: RespVecConvertError<RespBytesConvertError>) -> Error {
         Error::InvalidRequest
     }
 }
@@ -76,7 +76,7 @@ fn send_stream_events(
     stream: EsStream,
     tree: Arc<Tree>,
     mut sender: mpsc::UnboundedSender<Result<Response, String>>,
-) -> sled::Result<(), ()>
+) -> sled::Result<()>
 {
     info!("spawning a blocking subscription for {}", stream);
 
@@ -111,7 +111,7 @@ fn send_stream_events(
             if is_accepted {
                 let stream = stream.name.clone();
                 let number = EventNumber(event_number);
-                let event = RawEvent::new(value.to_vec());
+                let event = RawEvent::new(value);
                 let event_name = match event.name() {
                     Ok(name) => name,
                     Err(err) => {
@@ -144,7 +144,6 @@ fn send_stream_events(
             if is_accepted {
                 let stream = stream.name.clone();
                 let number = EventNumber(event_number);
-
                 let event = RawEvent::new(value);
                 let event_name = match event.name() {
                     Ok(name) => name,
