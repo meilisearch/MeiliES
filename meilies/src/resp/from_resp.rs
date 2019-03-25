@@ -10,7 +10,7 @@ pub trait FromResp: Sized {
 impl FromResp for RespValue {
     type Error = (); // FIXME replace with never (!)
 
-    fn from_resp(value: RespValue) -> Result<Self, <RespValue as FromResp>::Error> {
+    fn from_resp(value: RespValue) -> Result<Self, <Self as FromResp>::Error> {
         Ok(value)
     }
 }
