@@ -238,8 +238,26 @@ fn handle_request(
     Ok(())
 }
 
+#[cfg(feature = "sentry")]
+fn init_sentry() {
+    let guard = sentry::init(sentry::ClientOptions::default());
+
+    if guard.is_enabled() {
+        eprintln!("I am sentrified! 🎉");
+    }
+
+    sentry::integrations::panic::register_panic_handler();
+    sentry::integrations::env_logger::init(None, Default::default());
+}
+
 fn main() {
+
+    #[cfg(feature = "sentry")]
+    init_sentry();
+
+    #[cfg(not(feature = "sentry"))]
     let _ = env_logger::init();
+
     let opt = Opt::from_args();
 
     let addr = match opt.hostname.parse() {
