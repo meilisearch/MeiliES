@@ -26,16 +26,3 @@ impl fmt::Debug for EventId {
         write!(fmt, "{}", Into::<u64>::into(*self))
     }
 }
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn inverse() {
-        for x in 0..=100_000 {
-            let x2 = EventId::from(x).into();
-            assert_eq!(x, x2);
-        }
-    }
-}

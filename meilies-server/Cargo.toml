@@ -13,3 +13,4 @@ sled = "0.20.0"
 structopt = { version = "0.2.14", default-features = false }
 tokio = "0.1.16"
 tokio-threadpool = "0.1.12"
+sentry = { version = "0.15.2", optional = true }
