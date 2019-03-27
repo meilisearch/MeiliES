@@ -1,0 +1,11 @@
+[Unit]
+Description=A Rust based event store server using the Redis protocol
+After=network.target
+
+[Service]
+ExecStart=/usr/local/bin/meilies-server
+Type=exec
+Restart=on-failure
+
+[Install]
+WantedBy=default.target

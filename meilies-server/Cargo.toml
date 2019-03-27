@@ -1,7 +1,9 @@
 [package]
 name = "meilies-server"
+description = "A Rust based event store server using the Redis protocol"
+license = "MIT"
 version = "0.1.0"
-authors = ["Kerollmops <renault.cle@gmail.com>"]
+authors = ["Kerollmops <kero@meilisearch.com>"]
 edition = "2018"
 
 [dependencies]
@@ -14,3 +16,13 @@ structopt = { version = "0.2.14", default-features = false }
 tokio = "0.1.16"
 tokio-threadpool = "0.1.12"
 sentry = { version = "0.15.2", optional = true }
+
+[package.metadata.deb]
+maintainer = "Kerollmops <kero@meilisearch.com>"
+copyright = "2019, Kerollmops <kero@meilisearch.com>"
+depends = "$auto, systemd"
+section = "database"
+priority = "required"
+assets = [
+    ["target/release/meilies-server", "/usr/local/bin", "755"]
+]
