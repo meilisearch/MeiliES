@@ -2,13 +2,13 @@ use std::net::SocketAddr;
 use std::{fmt, io};
 
 use futures::{Future, Stream, Sink};
-use tokio_retry::RetryIf;
+use tokio_retry::Retry;
 use log::warn;
 use meilies::stream::{StreamName, EventNumber, EventData, EventName};
 use meilies::reqresp::{Request, RequestMsgError};
 use meilies::reqresp::{Response, ResponseMsgError};
 
-use crate::steel_connection::{must_retry, retry_strategy};
+use crate::steel_connection::retry_strategy;
 use super::{connect, SteelConnection};
 
 /// Open a framed paired connection with a server.
@@ -53,14 +53,14 @@ impl fmt::Display for PairedConnectionError {
 impl PairedConnection {
     /// Open a framed paired connection with a server.
     pub fn connect(addr: SocketAddr) -> impl Future<Item=PairedConnection, Error=tokio_retry::Error<io::Error>> {
-        RetryIf::spawn(retry_strategy(), move || {
+        Retry::spawn(retry_strategy(), move || {
             warn!("Connecting to {}", addr);
             connect(&addr)
                 .map(move |connection| {
                     let connection = SteelConnection::new(addr, connection);
                     PairedConnection { connection }
                 })
-        }, must_retry)
+        })
     }
 
     /// Publish an event to a stream, specifying the event name and data.

@@ -15,7 +15,7 @@ mod steel_connection;
 
 pub use self::sub::{sub_connect, SubStream, SubController, ProtocolError};
 pub use self::paired::{paired_connect, PairedConnection};
-use self::steel_connection::{retry_strategy, must_retry, SteelConnection};
+use self::steel_connection::{retry_strategy, SteelConnection};
 
 pub type ClientConnection = Framed<TcpStream, ClientCodec>;
 pub type ClientConnectionWriter = SplitSink<Framed<TcpStream, ClientCodec>>;
