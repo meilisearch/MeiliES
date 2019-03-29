@@ -4,7 +4,7 @@ use std::{io, mem};
 use futures::{Future, Async, AsyncSink, Stream, Sink};
 use log::{error, warn, info};
 use meilies::reqresp::{Request, RequestMsgError, Response, ResponseMsgError};
-use tokio_retry::{RetryIf, strategy::FibonacciBackoff};
+use tokio_retry::{Retry, strategy::FibonacciBackoff};
 use tokio_retry::Error as TrError;
 
 use super::{connect, ClientConnection};
@@ -40,17 +40,11 @@ pub fn retry_strategy() -> std::iter::Take<FibonacciBackoff> {
     FibonacciBackoff::from_millis(100).take(50)
 }
 
-/// The conditions to try a reconnection.
-pub fn must_retry(e: &io::Error) -> bool {
-    use io::ErrorKind::*;
-    e.kind() == BrokenPipe || e.kind() == ConnectionRefused
-}
-
 fn retry_future(addr: SocketAddr) -> Box<Future<Item=ClientConnection, Error=io::Error> + Send> {
-    let retry = RetryIf::spawn(retry_strategy(), move || {
+    let retry = Retry::spawn(retry_strategy(), move || {
             warn!("Reconnecting to {}", addr);
             connect(&addr)
-        }, must_retry)
+        })
         .map_err(|error| match error {
             TrError::OperationError(e) => e,
             TrError::TimerError(e) => io::Error::new(io::ErrorKind::Other, e),
@@ -77,7 +71,7 @@ impl Stream for SteelConnection {
                         use meilies::resp::RespMsgError::IoError;
 
                         match error {
-                            RespMsgError(IoError(ref e)) if must_retry(e) => {
+                            RespMsgError(IoError(e)) => {
                                 error!("Connection error with {}; {}", self.addr, e);
                                 self.conn_state = ConnState::Connecting(retry_future(self.addr));
                                 self.poll()
@@ -139,7 +133,7 @@ impl Sink for SteelConnection {
                         use meilies::resp::RespMsgError::IoError;
 
                         match error {
-                            RespMsgError(IoError(ref e)) if must_retry(e) => {
+                            RespMsgError(IoError(e)) => {
                                 error!("Connection error with {}; {}", self.addr, e);
                             self.conn_state = ConnState::Connecting(retry_future(self.addr));
                             self.poll_complete()

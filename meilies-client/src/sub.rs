@@ -9,9 +9,9 @@ use meilies::reqresp::{Request, RequestMsgError, Response, ResponseMsgError};
 use meilies::stream::{Stream as EsStream, StreamName};
 use tokio::sync::mpsc;
 use futures::stream::SplitStream;
-use tokio_retry::RetryIf;
+use tokio_retry::Retry;
 
-use super::{connect, retry_strategy, must_retry, SteelConnection};
+use super::{connect, retry_strategy, SteelConnection};
 
 #[derive(Default)]
 struct StreamContext {
@@ -29,14 +29,14 @@ pub struct EventStream {
 
 impl EventStream {
     fn connect(addr: SocketAddr) -> impl Future<Item=EventStream, Error=tokio_retry::Error<io::Error>> {
-        RetryIf::spawn(retry_strategy(), move || {
+        Retry::spawn(retry_strategy(), move || {
             warn!("Connecting to {}", addr);
             connect(&addr)
                 .map(move |connection| {
                     let connection = SteelConnection::new(addr, connection);
                     EventStream { state: HashMap::new(), connection }
                 })
-        }, must_retry)
+        })
     }
 
     fn send_stream_subscriptions(&mut self) -> Result<(), ProtocolError> {
