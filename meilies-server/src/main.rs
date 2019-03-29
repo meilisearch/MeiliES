@@ -75,7 +75,7 @@ impl From<RespVecConvertError<RespBytesConvertError>> for Error {
 fn send_stream_events(
     stream: EsStream,
     tree: Arc<Tree>,
-    mut sender: mpsc::UnboundedSender<Result<Response, String>>,
+    mut sender: mpsc::Sender<Result<Response, String>>,
 ) -> sled::Result<()>
 {
     info!("spawning a blocking subscription for {}", stream);
@@ -172,7 +172,7 @@ fn send_stream_events(
 fn handle_request(
     request: Request,
     db: Db,
-    mut sender: mpsc::UnboundedSender<Result<Response, String>>
+    mut sender: mpsc::Sender<Result<Response, String>>
 ) -> Result<(), Error>
 {
     match request {
@@ -286,7 +286,7 @@ fn main() {
         .for_each(move |socket| {
             let framed = ServerCodec::default().framed(socket);
             let (writer, reader) = framed.split();
-            let (sender, receiver) = mpsc::unbounded_channel();
+            let (sender, receiver) = mpsc::channel(10);
 
             let mut error_sender = sender.clone();
 
