@@ -4,10 +4,16 @@ use std::fmt;
 
 use crate::resp::{RespValue, FromResp, RespStringConvertError};
 
+pub const ALL_STREAMS: &str = "$all";
+
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub struct StreamName(String);
 
 impl StreamName {
+    pub fn all() -> StreamName {
+        StreamName(String::from(ALL_STREAMS))
+    }
+
     pub fn new(name: String) -> Result<StreamName, StreamNameError> {
         if name.is_empty() {
             return Err(StreamNameError::EmptyName)
@@ -87,7 +93,13 @@ impl fmt::Display for StreamNameError {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         match self {
             StreamNameError::EmptyName => f.write_str("stream name is empty"),
-            StreamNameError::ContainColon => f.write_str("stream name contain colon (:)"),
+            StreamNameError::ContainColon => f.write_str("stream name contains a colon (:)"),
         }
+    }
+}
+
+impl PartialEq<&'_ str> for StreamName {
+    fn eq(&self, other: &&'_ str) -> bool {
+        self.0.eq(other)
     }
 }

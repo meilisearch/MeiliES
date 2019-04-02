@@ -17,7 +17,7 @@ use tokio::sync::mpsc;
 
 use meilies::reqresp::{ServerCodec, Request, Response};
 use meilies::reqresp::{RequestMsgError, ResponseMsgError};
-use meilies::stream::{RawEvent, EventNumber, Stream as EsStream, StartReadFrom};
+use meilies::stream::{RawEvent, EventNumber, Stream as EsStream, StreamName as EsStreamName, StartReadFrom};
 use event_id::EventId;
 use meilies::resp::{RespMsgError, RespVecConvertError, RespBytesConvertError};
 
@@ -172,6 +172,37 @@ fn handle_request(
 ) -> Result<(), Error>
 {
     match request {
+        Request::SubscribeAll { from } => {
+            let tree_names = db.tree_names().into_iter().filter(|n| n != b"__sled__default");
+            let stream_strings = tree_names.into_iter().map(|b| String::from_utf8(b).unwrap());
+            let stream_names = stream_strings.map(|s| EsStreamName::new(s).unwrap());
+            let all_streams: Vec<_> = stream_names.map(|n| EsStream::new(n, from)).collect();
+
+            for stream in all_streams {
+                let tree = db.open_tree(stream.name.clone().into_bytes())?;
+
+                let subscribed = Response::Subscribed { stream: stream.name.clone() };
+                if sender.start_send(Ok(subscribed)).is_err() {
+                    info!("encountered closed channel");
+                }
+
+                let sender = sender.clone();
+                tokio::spawn(poll_fn(move || {
+                    let mut sender = sender.clone();
+                    let stream = stream.clone();
+                    let tree = tree.clone();
+
+                    tokio_threadpool::blocking(move || {
+                        if let Err(e) = send_stream_events(stream, tree, sender.clone()) {
+                            if sender.start_send(Err(e.to_string())).is_err() {
+                                info!("encountered closed channel");
+                            }
+                        }
+                    })
+                    .map_err(|e| error!("error; {}", e))
+                }));
+            }
+        }
         Request::Subscribe { streams } => {
             for stream in streams {
                 let mut sender = sender.clone();
