@@ -19,11 +19,7 @@ use meilies::reqresp::{ServerCodec, Request, Response};
 use meilies::reqresp::{RequestMsgError, ResponseMsgError};
 use meilies::stream::{RawEvent, EventNumber, Stream as EsStream, StartReadFrom};
 use event_id::EventId;
-use meilies::resp::{
-    RespMsgError,
-    RespVecConvertError,
-    RespBytesConvertError,
-};
+use meilies::resp::{RespMsgError, RespVecConvertError, RespBytesConvertError};
 
 mod event_id;
 
@@ -204,9 +200,10 @@ fn handle_request(
             }
         },
         Request::Publish { stream, event_name, event_data } => {
-            let tree = db.open_tree(stream.into_bytes())?;
             let event_id = EventId::from(db.generate_id()?);
+            info!("{:?} {:?} {:?}", stream, event_name, event_id);
 
+            let tree = db.open_tree(stream.into_bytes())?;
             let raw_length = event_name.as_str().len().to_be_bytes();
             let raw_name = event_name.as_str().as_bytes();
             let raw_data = event_data.0;
