@@ -8,7 +8,7 @@ use std::time::Instant;
 
 use futures::future::poll_fn;
 use log::{info, error};
-use sled::{Db, Tree, Event};
+use sled::{Db, Tree, Event, ConfigBuilder};
 use structopt::StructOpt;
 use tokio::codec::Decoder;
 use tokio::net::TcpListener;
@@ -268,7 +268,14 @@ fn main() {
     let addr = SocketAddr::new(addr, opt.port);
 
     let now = Instant::now();
-    let db = match Db::start_default(opt.db_path) {
+
+    let config = ConfigBuilder::new()
+         .path(opt.db_path)
+         .use_compression(true)
+         .compression_factor(22)
+         .build();
+
+    let db = match Db::start(config) {
         Ok(db) => db,
         Err(e) => return error!("error opening database; {}", e),
     };
