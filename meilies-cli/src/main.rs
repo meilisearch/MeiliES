@@ -25,7 +25,7 @@ struct Opt {
 }
 
 fn main() {
-    let _ = stderrlog::new().color(stderrlog::ColorChoice::Never).verbosity(2).init();
+    let _ = stderrlog::new().verbosity(2).init();
 
     let opt = Opt::from_args();
     let addr = (opt.hostname.as_str(), opt.port);
