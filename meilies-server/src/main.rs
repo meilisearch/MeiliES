@@ -251,7 +251,6 @@ fn init_sentry() {
 }
 
 fn main() {
-
     #[cfg(feature = "sentry")]
     init_sentry();
 
