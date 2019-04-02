@@ -1,6 +1,6 @@
 [package]
 name = "meilies-server"
-version = "0.1.1"
+version = "0.1.2"
 authors = ["Kerollmops <renault.cle@gmail.com>"]
 edition = "2018"
 
