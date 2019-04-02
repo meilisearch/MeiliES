@@ -200,10 +200,10 @@ fn handle_request(
             }
         },
         Request::Publish { stream, event_name, event_data } => {
-            let event_id = EventId::from(db.generate_id()?);
-            info!("{:?} {:?} {:?}", stream, event_name, event_id);
+            let tree = db.open_tree(stream.clone().into_bytes())?;
+            let event_number = EventNumber(tree.len() as u64);
 
-            let tree = db.open_tree(stream.into_bytes())?;
+            let event_id = EventId::from(db.generate_id()?);
             let raw_length = event_name.as_str().len().to_be_bytes();
             let raw_name = event_name.as_str().as_bytes();
             let raw_data = event_data.0;
@@ -216,6 +216,8 @@ fn handle_request(
             if let Err(e) = tree.set(event_id, raw_event) {
                 return Err(Error::InternalError(e))
             }
+
+            info!("{:?} {:?} {:?}", stream, event_name, event_number);
 
             if sender.start_send(Ok(Response::Ok)).is_err() {
                 info!("encountered closed channel");
