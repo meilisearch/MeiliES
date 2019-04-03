@@ -34,6 +34,10 @@ struct Opt {
     #[structopt(short = "p", long = "port", default_value = "6480")]
     port: u16,
 
+    /// The number of messages pending before being sent.
+    #[structopt(long = "channel-bound", default_value = "10")]
+    channel_bound: usize,
+
     /// Database path
     #[structopt(long = "db-path", parse(from_os_str), default_value = "/var/lib/meilies")]
     db_path: PathBuf,
@@ -295,6 +299,7 @@ fn main() {
     };
 
     let addr = SocketAddr::new(addr, opt.port);
+    let channel_bound = opt.channel_bound;
 
     let now = Instant::now();
 
@@ -322,7 +327,7 @@ fn main() {
         .for_each(move |socket| {
             let framed = ServerCodec::default().framed(socket);
             let (writer, reader) = framed.split();
-            let (sender, receiver) = mpsc::channel(10);
+            let (sender, receiver) = mpsc::channel(channel_bound);
 
             let mut error_sender = sender.clone();
 
