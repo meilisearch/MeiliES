@@ -8,6 +8,7 @@ use tokio::prelude::*;
 use meilies_client::{sub_connect, paired_connect};
 use meilies::resp::{RespValue, FromResp};
 use meilies::reqresp::Request;
+use meilies::stream::Stream as EsStream;
 
 #[derive(Debug, StructOpt)]
 #[structopt(name = "meilies-cli", about = "A basic cli for MeiliES.")]
@@ -43,6 +44,29 @@ fn main() {
     };
 
     let fut = match command {
+        Request::SubscribeAll { from } => {
+            let fut = sub_connect(addr)
+                .map_err(|e| error!("{}", e))
+                .and_then(move |(mut ctrl, msgs)| {
+
+                    ctrl.subscribe_to(EsStream::all(from));
+
+                    msgs.for_each(move |msg| {
+                        match msg {
+                            Ok(response) => println!("{:?}", response),
+                            Err(error) => eprintln!("Error: {}", error),
+                        }
+                        future::ok(())
+                    })
+                    .map_err(|e| error!("{:?}", e))
+                })
+                .and_then(|_| {
+                    println!("Connection closed by the server");
+                    Err(())
+                });
+
+            Box::new(fut) as Box<dyn Future<Item=(), Error=()> + Send>
+        }
         Request::Subscribe { streams } => {
             let fut = sub_connect(addr)
                 .map_err(|e| error!("{}", e))

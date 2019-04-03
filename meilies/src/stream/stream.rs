@@ -45,6 +45,16 @@ pub struct Stream {
     pub from: StartReadFrom,
 }
 
+impl Stream {
+    pub fn all(from: StartReadFrom) -> Stream {
+        Stream::new(StreamName::all(), from)
+    }
+
+    pub fn new(name: StreamName, from: StartReadFrom) -> Stream {
+        Stream { name, from }
+    }
+}
+
 impl fmt::Debug for Stream {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         write!(f, "Stream(\"{}\")", self)

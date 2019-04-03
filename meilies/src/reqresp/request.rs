@@ -1,9 +1,11 @@
 use std::fmt;
-use crate::stream::{Stream, StreamName, EventData, EventName};
+use crate::stream::{Stream, StartReadFrom, StreamName, EventData, EventName};
+use crate::stream::ALL_STREAMS;
 use crate::resp::{RespValue, FromResp};
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Request {
+    SubscribeAll { from: StartReadFrom },
     Subscribe { streams: Vec<Stream> },
     Publish { stream: StreamName, event_name: EventName, event_data: EventData },
     LastEventNumber { stream: StreamName },
@@ -12,6 +14,11 @@ pub enum Request {
 impl Into<RespValue> for Request {
     fn into(self) -> RespValue {
         match self {
+            Request::SubscribeAll { from } => {
+                let command = RespValue::bulk_string(&"subscribe"[..]);
+                let all = Stream::all(from).into();
+                RespValue::Array(vec![command, all])
+            },
             Request::Subscribe { streams } => {
                 let command = RespValue::bulk_string(&"subscribe"[..]);
                 let streams = streams.into_iter().map(Into::into);
@@ -77,8 +84,13 @@ impl FromResp for Request {
 
         match command.as_str() {
             "subscribe" => {
-                let streams: Result<_, _> = iter.map(Stream::from_resp).collect();
+                let streams: Result<Vec<_>, _> = iter.map(Stream::from_resp).collect();
                 let streams = streams.map_err(|_| InvalidArgumentRespType)?;
+
+                if let Some(stream) = streams.iter().find(|s| s.name == ALL_STREAMS) {
+                    return Ok(Request::SubscribeAll { from: stream.from })
+                }
+
                 Ok(Request::Subscribe { streams })
             },
             "publish" => {
