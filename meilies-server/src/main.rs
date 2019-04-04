@@ -1,7 +1,7 @@
+use std::convert::TryFrom;
 use std::fmt;
 use std::io::{Error as IoError, ErrorKind};
 use std::net::SocketAddr;
-use std::ops::{Bound::Excluded, Bound::Unbounded};
 use std::path::PathBuf;
 use std::sync::Arc;
 use std::time::Instant;
@@ -18,10 +18,26 @@ use tokio::sync::mpsc;
 use meilies::reqresp::{ServerCodec, Request, Response};
 use meilies::reqresp::{RequestMsgError, ResponseMsgError};
 use meilies::stream::{RawEvent, EventNumber, Stream as EsStream, StreamName as EsStreamName, StartReadFrom};
-use event_id::EventId;
 use meilies::resp::{RespMsgError, RespVecConvertError, RespBytesConvertError};
 
-mod event_id;
+fn new_event_number(numbers: &Tree, name: &EsStreamName) -> sled::Result<EventNumber> {
+    let mut current = numbers.get(name)?;
+
+    loop {
+        let previous = current.as_ref().map(|s| EventNumber::try_from(s.as_ref()).unwrap());
+
+        let new = previous.map_or(EventNumber::zero(), EventNumber::next);
+        let new_vec = new.to_be_bytes().to_vec();
+
+        let previous = previous.map(EventNumber::to_be_bytes);
+        let previous = previous.as_ref().map(AsRef::as_ref);
+
+        match numbers.cas(name, previous, Some(new_vec))? {
+            Ok(()) => return Ok(new),
+            Err(new_current) => current = new_current,
+        }
+    }
+}
 
 #[derive(Debug, StructOpt)]
 #[structopt(name = "meilies-server", about = "Start the server")]
@@ -74,92 +90,79 @@ fn send_stream_events(
     mut sender: mpsc::Sender<Result<Response, String>>,
 ) -> sled::Result<()>
 {
-    info!("spawning a blocking subscription for {}", stream);
+    info!("blocking subscription on {} spawned", stream);
 
-    let mut watcher = tree.watch_prefix(vec![]);
-    let mut event_number = 0;
-    let mut last_loop_event_id = None;
-    let mut has_more_events = true;
+    match stream.from {
+        StartReadFrom::EventNumber(num) => {
+            let mut last_number = EventNumber(num);
+            let mut watcher = tree.watch_prefix(vec![]);
 
-    while has_more_events {
-        // reset the watcher at each new loop
-        watcher = tree.watch_prefix(vec![]);
+            for result in tree.scan(last_number.to_be_bytes()) {
+                let (key, value) = result?;
+                let number = EventNumber::try_from(key.as_slice()).unwrap();
 
-        // if this is not the first iteration: skip the last unique id seen
-        let range = match last_loop_event_id.take() {
-            Some(id) => (Excluded(id), Unbounded),
-            None     => (Unbounded,    Unbounded),
-        };
-
-        has_more_events = false;
-
-        for result in tree.range(range) {
-            has_more_events = true;
-
-            let (key, value) = result?;
-            last_loop_event_id = Some(key);
-
-            let is_accepted = match stream.from {
-                StartReadFrom::EventNumber(number) => event_number >= number,
-                StartReadFrom::End => false,
-            };
-
-            if is_accepted {
-                let stream = stream.name.clone();
-                let number = EventNumber(event_number);
-                let event = RawEvent::new(value);
-                let event_name = match event.name() {
-                    Ok(name) => name,
-                    Err(err) => {
-                        error!("impossible to parse the event name; {}", err);
-                        return Err(IoError::new(ErrorKind::InvalidData, err.to_string()).into())
-                    }
+                let raw_event = RawEvent::new(value);
+                let event = Response::Event {
+                    stream: stream.name.clone(),
+                    number,
+                    event_name: raw_event.name().unwrap(),
+                    event_data: raw_event.data(),
                 };
-                let event_data = event.data();
-                let event = Response::Event { stream, number, event_name, event_data };
 
                 // the only possible error is a closed channel
                 if sender.start_send(Ok(event)).is_err() {
                     info!("encountered closed channel");
                     break
                 }
+
+                last_number = number;
+                watcher = tree.watch_prefix(vec![]);
             }
 
-            event_number += 1;
-        }
-    }
+            for event in watcher {
+                if let Event::Set(key, value) = event {
+                    let number = EventNumber::try_from(key.as_slice()).unwrap();
+                    if number <= last_number { continue }
 
-    for event in watcher {
-        if let Event::Set(_, value) = event {
+                    let raw_event = RawEvent::new(value);
+                    let event = Response::Event {
+                        stream: stream.name.clone(),
+                        number,
+                        event_name: raw_event.name().unwrap(),
+                        event_data: raw_event.data(),
+                    };
 
-            let is_accepted = match stream.from {
-                StartReadFrom::EventNumber(number) => event_number >= number,
-                StartReadFrom::End => true,
-            };
-
-            if is_accepted {
-                let stream = stream.name.clone();
-                let number = EventNumber(event_number);
-                let event = RawEvent::new(value);
-                let event_name = match event.name() {
-                    Ok(name) => name,
-                    Err(err) => {
-                        error!("impossible to parse the event name; {}", err);
-                        return Err(IoError::new(ErrorKind::InvalidData, err.to_string()).into())
+                    // the only possible error is a closed channel
+                    if sender.start_send(Ok(event)).is_err() {
+                        info!("encountered closed channel");
+                        break
                     }
-                };
-                let event_data = event.data();
-                let event = Response::Event { stream, number, event_name, event_data };
-
-                // the only possible error is a closed channel
-                if sender.start_send(Ok(event)).is_err() {
-                    info!("encountered closed channel");
-                    break
                 }
             }
+        },
+        StartReadFrom::End => {
+            let watcher = tree.watch_prefix(vec![]);
 
-            event_number += 1;
-        }
+            for event in watcher {
+                if let Event::Set(key, value) = event {
+                    let raw_event = RawEvent::new(value);
+                    let event = Response::Event {
+                        stream: stream.name.clone(),
+                        number: EventNumber::try_from(key.as_slice()).unwrap(),
+                        event_name: raw_event.name().unwrap(),
+                        event_data: raw_event.data(),
+                    };
+
+                    match sender.send(Ok(event)).wait() {
+                        Ok(s) => sender = s,
+                        Err(_) => {
+                            info!("encountered closed channel");
+                            return Ok(());
+                        }
+                    }
+                }
+            }
+        },
     }
 
     Ok(())
@@ -232,9 +235,8 @@ fn handle_request(
         },
         Request::Publish { stream, event_name, event_data } => {
             let tree = db.open_tree(stream.clone().into_bytes())?;
-            let event_number = EventNumber(tree.len() as u64);
 
-            let event_id = EventId::from(db.generate_id()?);
+            let event_number = new_event_number(&db, &stream)?;
             let raw_length = event_name.as_str().len().to_be_bytes();
             let raw_name = event_name.as_str().as_bytes();
             let raw_data = event_data.0;
@@ -244,7 +246,7 @@ fn handle_request(
             raw_event.extend_from_slice(&raw_name);
             raw_event.extend_from_slice(&raw_data);
 
-            if let Err(e) = tree.set(event_id, raw_event) {
+            if let Err(e) = tree.set(event_number.to_be_bytes(), raw_event) {
                 return Err(Error::InternalError(e))
             }
 
@@ -255,8 +257,8 @@ fn handle_request(
             }
         },
         Request::LastEventNumber { stream } => {
-            let tree = db.open_tree(stream.clone().into_bytes())?;
-            let number = tree.len().checked_sub(1).map(|x| EventNumber(x as u64));
+            let key = db.get(&stream)?;
+            let number = key.map(|k| EventNumber::try_from(k.as_ref()).unwrap());
 
             let last_event_number = Response::LastEventNumber { stream, number };
             if sender.start_send(Ok(last_event_number)).is_err() {

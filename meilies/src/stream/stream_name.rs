@@ -45,6 +45,12 @@ impl fmt::Display for StreamName {
     }
 }
 
+impl AsRef<[u8]> for StreamName {
+    fn as_ref(&self) -> &[u8] {
+        self.0.as_ref()
+    }
+}
+
 #[derive(Debug)]
 pub enum RespStreamNameConvertError {
     InvalidRespType,
