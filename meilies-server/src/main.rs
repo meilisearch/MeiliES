@@ -50,6 +50,10 @@ struct Opt {
     #[structopt(short = "p", long = "port", default_value = "6480")]
     port: u16,
 
+    /// Specify the zstd compression factor (irreversible)
+    #[structopt(long = "compression-factor")]
+    compression_factor: Option<i32>,
+
     /// Database path
     #[structopt(long = "db-path", parse(from_os_str), default_value = "/var/lib/meilies")]
     db_path: PathBuf,
@@ -314,11 +318,13 @@ fn main() {
 
     let now = Instant::now();
 
-    let config = ConfigBuilder::new()
-         .path(opt.db_path)
-         .use_compression(true)
-         .compression_factor(22)
-         .build();
+    let mut builder = ConfigBuilder::new().path(opt.db_path);
+
+    if let Some(compression_factor) = opt.compression_factor {
+        builder = builder.use_compression(true).compression_factor(compression_factor);
+    }
+
+    let config = builder.build();
 
     let db = match Db::start(config) {
         Ok(db) => db,
