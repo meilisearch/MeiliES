@@ -268,6 +268,8 @@ fn handle_request(
                 return Err(Error::InternalError(e))
             }
 
+            db.flush()?;
+
             info!("{:?} {:?} {:?}", stream, event_name, event_number);
 
             if sender.send(Ok(Response::Ok)).wait().is_err() {
