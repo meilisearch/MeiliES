@@ -302,9 +302,35 @@ fn init_sentry() {
     sentry::integrations::env_logger::init(None, Default::default());
 }
 
+#[cfg(feature = "vigil")]
+fn init_vigil() {
+    use vigil::Reporter;
+    use std::{env, time::Duration};
+
+    let endpoint = env::var("VIGIL_ENDPOINT").expect("VIGIL_ENDPOINT");
+    let token = env::var("VIGIL_TOKEN").expect("VIGIL_TOKEN");
+    let probe = env::var("VIGIL_PROBE").expect("VIGIL_PROBE");
+    let node = env::var("VIGIL_NODE").expect("VIGIL_NODE");
+    let replica = env::var("VIGIL_REPLICA").expect("VIGIL_REPLICA");
+
+    let reporter = Reporter::new(&endpoint, &token)
+        .probe_id(&probe)
+        .node_id(&node)
+        .replica_id(&replica)
+        .interval(Duration::from_secs(10))
+        .build();
+
+    reporter.run().expect("Can not start vigil");
+
+    eprintln!("I am vigiled! 🎉");
+}
+
 fn main() {
     #[cfg(feature = "sentry")]
     init_sentry();
+
+    #[cfg(feature = "vigil")]
+    init_vigil();
 
     #[cfg(not(feature = "sentry"))]
     let _ = env_logger::init();
