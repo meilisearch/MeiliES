@@ -49,7 +49,7 @@ fn main() {
                 .map_err(|e| error!("{}", e))
                 .and_then(move |(mut ctrl, msgs)| {
 
-                    ctrl.subscribe_to(EsStream::all(from));
+                    ctrl.subscribe_to(EsStream::all(from)).unwrap();
 
                     msgs.for_each(move |msg| {
                         match msg {
@@ -73,7 +73,7 @@ fn main() {
                 .and_then(|(mut ctrl, msgs)| {
 
                     for stream in streams {
-                        ctrl.subscribe_to(stream);
+                        ctrl.subscribe_to(stream).unwrap();
                     }
 
                     msgs.for_each(move |msg| {

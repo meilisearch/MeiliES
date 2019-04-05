@@ -2,11 +2,12 @@ use std::collections::HashMap;
 use std::net::SocketAddr;
 use std::{fmt, io};
 
-use futures::{Future, Poll, Async, AsyncSink, Stream, Sink};
+use futures::{Future, Poll, Async, AsyncSink, Stream, Sink, StartSend};
 use log::{error, warn};
 use meilies::resp::RespMsgError;
 use meilies::reqresp::{Request, RequestMsgError, Response, ResponseMsgError};
 use meilies::stream::{Stream as EsStream, StreamName};
+use tokio::sync::mpsc::error::UnboundedTrySendError;
 use tokio::sync::mpsc;
 use futures::stream::SplitStream;
 use tokio_retry::Retry;
@@ -39,7 +40,7 @@ impl EventStream {
         })
     }
 
-    fn send_stream_subscriptions(&mut self) -> Result<(), ProtocolError> {
+    fn send_stream_subscriptions(&mut self) -> StartSend<Request, ProtocolError> {
         // Now that a new connection has been successfully established
         // we can re-send our subscriptions with the appropriate event number.
 
@@ -52,10 +53,12 @@ impl EventStream {
         }
 
         let subscription = Request::Subscribe { streams };
-        self.start_send(subscription)?;
+        if let AsyncSink::NotReady(msg) = self.start_send(subscription)? {
+            return Ok(AsyncSink::NotReady(msg))
+        }
         self.poll_complete()?;
 
-        Ok(())
+        Ok(AsyncSink::Ready)
     }
 }
 
@@ -86,7 +89,9 @@ impl Stream for EventStream {
         };
 
         if self.connection.has_been_reconnected() {
-            self.send_stream_subscriptions()?;
+            if let AsyncSink::NotReady(msg) = self.send_stream_subscriptions()? {
+                error!("could not re-send subscriptions (not ready) {:?}", msg)
+            }
         }
 
         result.map_err(ProtocolError::ResponseMsgError)
@@ -107,7 +112,9 @@ impl Sink for EventStream {
         let result = self.connection.start_send(item);
 
         if self.connection.has_been_reconnected() {
-            self.send_stream_subscriptions()?;
+            if let AsyncSink::NotReady(msg) = self.send_stream_subscriptions()? {
+                return Ok(AsyncSink::NotReady(msg))
+            }
         }
 
         result.map_err(ProtocolError::RequestMsgError)
@@ -115,10 +122,6 @@ impl Sink for EventStream {
 
     fn poll_complete(&mut self) -> Result<Async<()>, Self::SinkError> {
         let result = self.connection.poll_complete();
-
-        if self.connection.has_been_reconnected() {
-            self.send_stream_subscriptions()?;
-        }
 
         result.map_err(ProtocolError::RequestMsgError)
     }
@@ -162,12 +165,9 @@ pub struct SubController {
 
 impl SubController {
     /// Ask the server to send events of the given stream.
-    pub fn subscribe_to(&mut self, stream: EsStream) {
+    pub fn subscribe_to(&mut self, stream: EsStream) -> Result<(), UnboundedTrySendError<Request>> {
         let command = Request::Subscribe { streams: vec![stream] };
-
-        if let Err(e) = self.sender.try_send(command) {
-            error!("{}", e);
-        }
+        self.sender.try_send(command)
     }
 }
 

@@ -52,7 +52,7 @@ fn main() {
         .map_err(|e| error!("{}", e))
         .and_then(move |(mut ctrl, msgs)| {
             for stream in opt.streams {
-                ctrl.subscribe_to(stream);
+                ctrl.subscribe_to(stream).unwrap();
             }
 
             paired_connect(dst_server)
