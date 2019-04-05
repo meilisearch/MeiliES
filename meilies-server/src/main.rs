@@ -98,10 +98,10 @@ fn send_stream_events(
 
     match stream.from {
         StartReadFrom::EventNumber(num) => {
-            let mut last_number = EventNumber(num);
+            let mut next_number = EventNumber(num);
             let mut watcher = tree.watch_prefix(vec![]);
 
-            for result in tree.scan(last_number.to_be_bytes()) {
+            for result in tree.scan(next_number.to_be_bytes()) {
                 let (key, value) = result?;
                 let number = EventNumber::try_from(key.as_slice()).unwrap();
 
@@ -121,28 +121,28 @@ fn send_stream_events(
                     }
                 }
 
-                last_number = number;
+                next_number = number.next();
                 watcher = tree.watch_prefix(vec![]);
             }
 
             for event in watcher {
                 if let Event::Set(key, value) = event {
                     let number = EventNumber::try_from(key.as_slice()).unwrap();
-                    if number <= last_number { continue }
+                    if number >= next_number {
+                        let raw_event = RawEvent::new(value);
+                        let event = Response::Event {
+                            stream: stream.name.clone(),
+                            number,
+                            event_name: raw_event.name().unwrap(),
+                            event_data: raw_event.data(),
+                        };
 
-                    let raw_event = RawEvent::new(value);
-                    let event = Response::Event {
-                        stream: stream.name.clone(),
-                        number,
-                        event_name: raw_event.name().unwrap(),
-                        event_data: raw_event.data(),
-                    };
-
-                    match sender.send(Ok(event)).wait() {
-                        Ok(s) => sender = s,
-                        Err(_) => {
-                            info!("encountered closed channel");
-                            return Ok(());
+                        match sender.send(Ok(event)).wait() {
+                            Ok(s) => sender = s,
+                            Err(_) => {
+                                info!("encountered closed channel");
+                                return Ok(());
+                            }
                         }
                     }
                 }
