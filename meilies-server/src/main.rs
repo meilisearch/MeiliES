@@ -54,6 +54,14 @@ struct Opt {
     #[structopt(long = "compression-factor")]
     compression_factor: Option<i32>,
 
+    /// Disable vigil initialization.
+    #[structopt(long = "no-vigil")]
+    no_vigil: bool,
+
+    /// Disable sentry initialization.
+    #[structopt(long = "no-sentry")]
+    no_sentry: bool,
+
     /// Database path
     #[structopt(long = "db-path", parse(from_os_str), default_value = "/var/lib/meilies")]
     db_path: PathBuf,
@@ -326,16 +334,17 @@ fn init_vigil() {
 }
 
 fn main() {
+    let opt = Opt::from_args();
+
     #[cfg(feature = "sentry")]
-    init_sentry();
+    { if !opt.no_sentry { init_sentry(); } }
 
     #[cfg(feature = "vigil")]
-    init_vigil();
+    { if !opt.no_vigil { init_vigil(); } }
 
-    #[cfg(not(feature = "sentry"))]
-    let _ = env_logger::init();
-
-    let opt = Opt::from_args();
+    if !cfg!(feature = "sentry") || opt.no_sentry {
+        let _ = env_logger::init();
+    }
 
     let addr = match opt.hostname.parse() {
         Ok(addr) => addr,
