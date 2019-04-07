@@ -189,6 +189,13 @@ fn handle_request(
             let stream_names = stream_strings.map(|s| EsStreamName::new(s).unwrap());
             let all_streams: Vec<_> = stream_names.map(|n| EsStream::new(n, from)).collect();
 
+            if all_streams.is_empty() {
+                if sender.send(Err(format!("No stream found"))).wait().is_err() {
+                    info!("encountered closed channel");
+                }
+                return Ok(())
+            }
+
             for stream in all_streams {
                 let tree = db.open_tree(stream.name.clone().into_bytes())?;
 
