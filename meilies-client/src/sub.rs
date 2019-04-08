@@ -13,7 +13,7 @@ use tokio_retry::Retry;
 
 use super::{connect, retry_strategy, SteelConnection};
 
-#[derive(Default)]
+#[derive(Debug, Default)]
 struct StreamContext {
     reconnected: bool,
     position: Option<u64>,
