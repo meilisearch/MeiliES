@@ -8,6 +8,7 @@ pub enum Response {
     Subscribed { stream: StreamName },
     Event { stream: StreamName, number: EventNumber, event_name: EventName, event_data: EventData },
     LastEventNumber { stream: StreamName, number: Option<EventNumber> },
+    StreamNames { streams: Vec<StreamName> },
 }
 
 impl Into<RespValue> for Response {
@@ -42,6 +43,12 @@ impl Into<RespValue> for Response {
                     RespValue::string(stream),
                     number,
                 ])
+            },
+            Response::StreamNames { streams } => {
+                let command = RespValue::string("stream-names");
+                let streams = streams.into_iter().map(|s| RespValue::SimpleString(s.into_inner()));
+                let args = Some(command).into_iter().chain(streams).collect();
+                RespValue::Array(args)
             }
         }
     }
@@ -136,6 +143,12 @@ impl FromResp for Response {
                 }
 
                 Ok(Response::LastEventNumber { stream, number })
+            },
+            "stream-names" => {
+                match iter.map(StreamName::from_resp).collect() {
+                    Ok(streams) => Ok(Response::StreamNames { streams }),
+                    Err(_) => Err(InvalidArgumentRespType),
+                }
             }
             _otherwise => Err(UnknownTypeName),
         }

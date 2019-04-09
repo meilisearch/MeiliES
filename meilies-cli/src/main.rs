@@ -116,6 +116,19 @@ fn main() {
 
             Box::new(fut) as Box<dyn Future<Item=(), Error=()> + Send>
         },
+        Request::StreamNames => {
+            let fut = paired_connect(addr)
+                .map_err(|e| error!("{}", e))
+                .and_then(|conn| {
+                    conn.stream_names()
+                        .map_err(|e| error!("{}", e))
+                })
+                .map(|(streams, _conn)| {
+                    println!("{:?}", streams)
+                });
+
+            Box::new(fut) as Box<dyn Future<Item=(), Error=()> + Send>
+        }
     };
 
     tokio::run(fut);
