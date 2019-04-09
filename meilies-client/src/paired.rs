@@ -112,4 +112,28 @@ impl PairedConnection {
                 }
             })
     }
+
+    /// Request the list of stream names
+    ///
+    /// Returns an empty Vec if the database does not contain any stream.
+    pub fn stream_names(
+        self,
+    ) -> impl Future<Item=(Vec<StreamName>, PairedConnection), Error=PairedConnectionError>
+    {
+        use PairedConnectionError::*;
+
+        let command = Request::StreamNames;
+
+        self.connection
+            .send(command)
+            .map_err(RequestMsgError)
+            .and_then(|framed| framed.into_future().map_err(|(e, _)| ResponseMsgError(e)))
+            .and_then(|(first, connection)| {
+                match first.ok_or(ConnectionClosed)? {
+                    Ok(Response::StreamNames { streams }) => Ok((streams, PairedConnection { connection })),
+                    Ok(response) => Err(InvalidServerResponse(response)),
+                    Err(error) => Err(ServerSide(error)),
+                }
+            })
+    }
 }

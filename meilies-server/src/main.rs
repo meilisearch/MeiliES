@@ -290,6 +290,16 @@ fn handle_request(
             if sender.send(Ok(last_event_number)).wait().is_err() {
                 info!("encountered closed channel");
             }
+        },
+        Request::StreamNames => {
+            let tree_names = db.tree_names().into_iter().filter(|n| n != b"__sled__default");
+            let stream_strings = tree_names.into_iter().map(|b| String::from_utf8(b).unwrap());
+            let stream_names = stream_strings.map(|s| EsStreamName::new(s).unwrap()).collect();
+            let streams = Response::StreamNames { streams: stream_names };
+
+            if sender.send(Ok(streams)).wait().is_err() {
+                info!("encountered closed channel");
+            }
         }
     }
 

@@ -9,6 +9,7 @@ pub enum Request {
     Subscribe { streams: Vec<Stream> },
     Publish { stream: StreamName, event_name: EventName, event_data: EventData },
     LastEventNumber { stream: StreamName },
+    StreamNames,
 }
 
 impl Into<RespValue> for Request {
@@ -37,6 +38,11 @@ impl Into<RespValue> for Request {
                 RespValue::Array(vec![
                     RespValue::bulk_string(&"last-event-number"[..]),
                     RespValue::bulk_string(stream.to_string()),
+                ])
+            },
+            Request::StreamNames => {
+                RespValue::Array(vec![
+                    RespValue::bulk_string(&"stream-names"[..]),
                 ])
             }
         }
@@ -122,6 +128,9 @@ impl FromResp for Request {
                 }
 
                 Ok(Request::LastEventNumber { stream })
+            },
+            "stream-names" => {
+                Ok(Request::StreamNames)
             }
             _otherwise => Err(UnknownCommandName),
         }
