@@ -8,7 +8,7 @@ use std::time::Instant;
 
 use futures::future::poll_fn;
 use log::{info, error};
-use sled::{Db, Tree, Event, ConfigBuilder};
+use sled::{Db, Tree, IVec, Event, ConfigBuilder};
 use structopt::StructOpt;
 use tokio::codec::Decoder;
 use tokio::net::TcpListener;
@@ -21,22 +21,14 @@ use meilies::stream::{RawEvent, EventNumber, Stream as EsStream, StreamName as E
 use meilies::resp::{RespMsgError, RespVecConvertError, RespBytesConvertError};
 
 fn new_event_number(numbers: &Tree, name: &EsStreamName) -> sled::Result<EventNumber> {
-    let mut current = numbers.get(name)?;
-
-    loop {
-        let previous = current.as_ref().map(|s| EventNumber::try_from(s.as_ref()).unwrap());
-
+    let new_value = numbers.update_and_fetch(name, |previous| {
+        let previous = previous.map(|s| EventNumber::try_from(s).unwrap());
         let new = previous.map_or(EventNumber::zero(), EventNumber::next);
-        let new_vec = new.to_be_bytes().to_vec();
+        let slice = &new.to_be_bytes()[..];
+        Some(IVec::from(slice))
+    })?;
 
-        let previous = previous.map(EventNumber::to_be_bytes);
-        let previous = previous.as_ref().map(AsRef::as_ref);
-
-        match numbers.cas(name, previous, Some(new_vec))? {
-            Ok(()) => return Ok(new),
-            Err(new_current) => current = new_current,
-        }
-    }
+    Ok(EventNumber::try_from(new_value.unwrap().as_ref()).unwrap())
 }
 
 #[derive(Debug, StructOpt)]
