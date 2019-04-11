@@ -4,9 +4,9 @@ use std::io::{Error as IoError, ErrorKind};
 use std::net::SocketAddr;
 use std::path::PathBuf;
 use std::sync::Arc;
+use std::thread;
 use std::time::Instant;
 
-use futures::future::poll_fn;
 use log::{info, error};
 use sled::{Db, Tree, IVec, Event, ConfigBuilder};
 use structopt::StructOpt;
@@ -64,6 +64,7 @@ enum Error {
     RequestMsgError(RequestMsgError),
     InvalidRequest,
     InternalError(sled::Error),
+    IoError(IoError),
 }
 
 impl fmt::Display for Error {
@@ -72,6 +73,7 @@ impl fmt::Display for Error {
             Error::RequestMsgError(e) => write!(f, "invalid request message; {}", e),
             Error::InvalidRequest => write!(f, "invalid request"),
             Error::InternalError(e) => write!(f, "internal error; {}", e),
+            Error::IoError(e) => write!(f, "io error; {}", e),
         }
     }
 }
@@ -85,6 +87,12 @@ impl From<sled::Error> for Error {
 impl From<RespVecConvertError<RespBytesConvertError>> for Error {
     fn from(_: RespVecConvertError<RespBytesConvertError>) -> Error {
         Error::InvalidRequest
+    }
+}
+
+impl From<IoError> for Error {
+    fn from(error: IoError) -> Error {
+        Error::IoError(error)
     }
 }
 
@@ -179,7 +187,7 @@ fn send_stream_events(
 fn handle_request(
     request: Request,
     db: Db,
-    mut sender: mpsc::Sender<Result<Response, String>>
+    sender: mpsc::Sender<Result<Response, String>>
 ) -> Result<(), Error>
 {
     match request {
@@ -190,65 +198,63 @@ fn handle_request(
             let all_streams: Vec<_> = stream_names.map(|n| EsStream::new(n, from)).collect();
 
             for stream in all_streams {
+                let sender = sender.clone();
                 let tree = db.open_tree(stream.name.clone().into_bytes())?;
 
-                let subscribed = Response::Subscribed { stream: stream.name.clone() };
-                match sender.send(Ok(subscribed)).wait() {
-                    Ok(s) => sender = s,
-                    Err(_) => {
-                        info!("encountered closed channel");
-                        return Ok(())
-                    }
-                }
+                thread::Builder::new().spawn(|| {
+                    let mut sender = sender;
 
-                let sender = sender.clone();
-                tokio::spawn(poll_fn(move || {
-                    let mut sender = sender.clone();
-                    let stream = stream.clone();
-                    let tree = tree.clone();
-
-                    tokio_threadpool::blocking(move || {
-                        if let Err(e) = send_stream_events(stream, tree, sender.clone()) {
-                            match sender.send(Err(e.to_string())).wait() {
-                                Ok(s) => sender = s,
-                                Err(_) => info!("encountered closed channel"),
-                            }
+                    let subscribed = Response::Subscribed { stream: stream.name.clone() };
+                    match sender.send(Ok(subscribed)).wait() {
+                        Ok(s) => sender = s,
+                        Err(_) => {
+                            info!("encountered closed channel");
+                            return;
                         }
-                    })
-                    .map_err(|e| error!("error; {}", e))
-                }));
+                    }
+
+                    let subscribed = Response::Subscribed { stream: stream.name.clone() };
+                    match sender.send(Ok(subscribed)).wait() {
+                        Ok(s) => sender = s,
+                        Err(_) => {
+                            info!("encountered closed channel");
+                            return;
+                        },
+                    }
+
+                    if let Err(e) = send_stream_events(stream, tree, sender.clone()) {
+                        if let Err(_) = sender.send(Err(e.to_string())).wait() {
+                            info!("encountered closed channel");
+                            return;
+                        }
+                    }
+                })?;
             }
         }
         Request::Subscribe { streams } => {
             for stream in streams {
-                let mut sender = sender.clone();
-
+                let sender = sender.clone();
                 let tree = db.open_tree(stream.name.clone().into_bytes())?;
 
-                let subscribed = Response::Subscribed { stream: stream.name.clone() };
-                match sender.send(Ok(subscribed)).wait() {
-                    Ok(s) => sender = s,
-                    Err(_) => {
-                        info!("encountered closed channel");
-                        return Ok(())
-                    },
-                }
+                thread::Builder::new().spawn(|| {
+                    let mut sender = sender;
 
-                tokio::spawn(poll_fn(move || {
-                    let mut sender = sender.clone();
-                    let stream = stream.clone();
-                    let tree = tree.clone();
+                    let subscribed = Response::Subscribed { stream: stream.name.clone() };
+                    match sender.send(Ok(subscribed)).wait() {
+                        Ok(s) => sender = s,
+                        Err(_) => {
+                            info!("encountered closed channel");
+                            return;
+                        },
+                    }
 
-                    tokio_threadpool::blocking(move || {
-                        if let Err(e) = send_stream_events(stream, tree, sender.clone()) {
-                            match sender.send(Err(e.to_string())).wait() {
-                                Ok(s) => sender = s,
-                                Err(_) => info!("encountered closed channel"),
-                            }
+                    if let Err(e) = send_stream_events(stream, tree, sender.clone()) {
+                        if let Err(_) = sender.send(Err(e.to_string())).wait() {
+                            info!("encountered closed channel");
+                            return;
                         }
-                    })
-                    .map_err(|e| error!("error; {}", e))
-                }));
+                    }
+                })?;
             }
         },
         Request::Publish { stream, event_name, event_data } => {
