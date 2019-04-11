@@ -12,6 +12,5 @@ meilies = { version = "0.1", path = "../meilies" }
 sled = { version = "0.22.1", features = ["compression"] }
 structopt = { version = "0.2.14", default-features = false }
 tokio = "0.1.16"
-tokio-threadpool = "0.1.12"
 sentry = { version = "0.15.2", optional = true }
 vigil = { version = "1.1.1", package = "vigil-reporter", optional = true }
