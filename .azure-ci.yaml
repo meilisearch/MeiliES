@@ -41,7 +41,7 @@ jobs:
           curl https://sh.rustup.rs -sSf | sh -s -- -y --default-toolchain stable
         displayName: 'Install rustc'
       - script: |
-          $HOME/.cargo/bin/cargo build --release
+          $HOME/.cargo/bin/cargo build --all-features --release
         displayName: 'Build MeiliES'
       - task: CopyFiles@2
         inputs:
