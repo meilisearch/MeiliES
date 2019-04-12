@@ -12,14 +12,14 @@ jobs:
     container: tpayet/chiquitita:latest
     steps:
       - script: |
-          curl https://sh.rustup.rs -sSf | sh -s -- -y --default-toolchain nightly
-        displayName: 'Install rustc nightly'
+          curl https://sh.rustup.rs -sSf | sh -s -- -y --default-toolchain stable
+        displayName: 'Install rustc stable'
       - script: |
           $HOME/.cargo/bin/cargo check
-        displayName: 'Check MeiliES nightly'
+        displayName: 'Check MeiliES stable'
       - script: |
           $HOME/.cargo/bin/cargo test
-        displayName: 'Test MeiliES nightly'
+        displayName: 'Test MeiliES stable'
 
   - job: build
     dependsOn:
@@ -38,7 +38,7 @@ jobs:
     container: $[ variables['containerResource'] ]
     steps:
       - script: |
-          curl https://sh.rustup.rs -sSf | sh -s -- -y --default-toolchain nightly
+          curl https://sh.rustup.rs -sSf | sh -s -- -y --default-toolchain stable
         displayName: 'Install rustc'
       - script: |
           $HOME/.cargo/bin/cargo build --release
