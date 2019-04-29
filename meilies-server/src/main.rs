@@ -210,15 +210,6 @@ fn handle_request(
                         Err(_) => {
                             info!("encountered closed channel");
                             return;
-                        }
-                    }
-
-                    let subscribed = Response::Subscribed { stream: stream.name.clone() };
-                    match sender.send(Ok(subscribed)).wait() {
-                        Ok(s) => sender = s,
-                        Err(_) => {
-                            info!("encountered closed channel");
-                            return;
                         },
                     }
 
