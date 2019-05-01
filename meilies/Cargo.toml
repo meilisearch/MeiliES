@@ -9,6 +9,6 @@ authors = ["Kerollmops <renault.cle@gmail.com>"]
 edition = "2018"
 
 [dependencies]
-bytes = "0.4.11"
+bytes = "0.4.12"
 subslice = "0.2.2"
-tokio = "0.1.16"
+tokio = "0.1.19"

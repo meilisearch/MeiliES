@@ -9,8 +9,8 @@ authors = ["Kerollmops <renault.cle@gmail.com>"]
 edition = "2018"
 
 [dependencies]
-futures = "0.1.25"
+futures = "0.1.26"
 log = "0.4.6"
 meilies = { version = "0.1", path = "../meilies" }
-tokio = "0.1.16"
+tokio = "0.1.19"
 tokio-retry = "0.2.0"
