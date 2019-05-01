@@ -1,14 +1,14 @@
 [package]
 name = "meilies-cli"
-version = "0.1.1"
+version = "0.2.0"
 authors = ["Clément Renault <renault.cle@gmail.com>"]
 edition = "2018"
 
 [dependencies]
 futures = "0.1.26"
 log = "0.4.6"
-meilies = { version = "0.1", path = "../meilies" }
-meilies-client = { version = "0.1.1", path = "../meilies-client" }
+meilies = { version = "0.2.0", path = "../meilies" }
+meilies-client = { version = "0.2.0", path = "../meilies-client" }
 stderrlog = "0.4.1"
 structopt = { version = "0.2.15", default-features = false }
 tokio = "0.1.19"
