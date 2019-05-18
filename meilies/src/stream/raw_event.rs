@@ -3,7 +3,7 @@ use std::error::Error;
 use super::{EventName, EventData};
 
 #[derive(Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
-pub struct RawEvent<T>(T);
+pub struct RawEvent<T>(pub T);
 
 impl<T: AsRef<[u8]>> RawEvent<T> {
     pub fn new(content: T) -> RawEvent<T> {
@@ -36,5 +36,11 @@ impl<T: AsRef<[u8]>> RawEvent<T> {
         let raw_name = &self.0.as_ref()[(8 + name_size)..];
 
         EventData(raw_name.to_owned())
+    }
+}
+
+impl<T: AsRef<[u8]>> AsRef<[u8]> for RawEvent<T> {
+    fn as_ref(&self) -> &[u8] {
+        self.0.as_ref()
     }
 }
