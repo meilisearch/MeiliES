@@ -50,6 +50,8 @@ impl fmt::Display for PairedConnectionError {
     }
 }
 
+impl std::error::Error for PairedConnectionError {}
+
 impl PairedConnection {
     /// Open a framed paired connection with a server.
     pub fn connect(addr: SocketAddr) -> impl Future<Item=PairedConnection, Error=tokio_retry::Error<io::Error>> {

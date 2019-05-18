@@ -78,6 +78,8 @@ impl fmt::Display for RespResponseConvertError {
     }
 }
 
+impl std::error::Error for RespResponseConvertError {}
+
 impl FromResp for Response {
     type Error = RespResponseConvertError;
 

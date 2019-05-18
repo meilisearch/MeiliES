@@ -108,6 +108,8 @@ impl fmt::Display for RespStreamConvertError {
     }
 }
 
+impl std::error::Error for RespStreamConvertError {}
+
 impl FromResp for Stream {
     type Error = RespStreamConvertError;
     fn from_resp(value: RespValue) -> Result<Self, Self::Error> {
@@ -179,6 +181,8 @@ impl fmt::Display for ParseStreamError {
         }
     }
 }
+
+impl std::error::Error for ParseStreamError {}
 
 #[cfg(test)]
 mod tests {

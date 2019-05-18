@@ -69,6 +69,8 @@ impl fmt::Display for RespStreamNameConvertError {
     }
 }
 
+impl std::error::Error for RespStreamNameConvertError {}
+
 impl FromResp for StreamName {
     type Error = RespStreamNameConvertError;
     fn from_resp(value: RespValue) -> Result<Self, Self::Error> {
@@ -103,6 +105,8 @@ impl fmt::Display for StreamNameError {
         }
     }
 }
+
+impl std::error::Error for StreamNameError {}
 
 impl PartialEq<&'_ str> for StreamName {
     fn eq(&self, other: &&'_ str) -> bool {

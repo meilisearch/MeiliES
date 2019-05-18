@@ -75,6 +75,8 @@ impl fmt::Display for RequestMsgError {
     }
 }
 
+impl std::error::Error for RequestMsgError {}
+
 impl From<RespMsgError> for RequestMsgError {
     fn from(error: RespMsgError) -> RequestMsgError {
         RequestMsgError::RespMsgError(error)
@@ -107,6 +109,8 @@ impl fmt::Display for ResponseMsgError {
         }
     }
 }
+
+impl std::error::Error for ResponseMsgError {}
 
 impl From<RespMsgError> for ResponseMsgError {
     fn from(error: RespMsgError) -> ResponseMsgError {

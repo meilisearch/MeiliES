@@ -53,6 +53,8 @@ impl fmt::Display for RespEventNameConvertError {
     }
 }
 
+impl std::error::Error for RespEventNameConvertError {}
+
 impl FromResp for EventName {
     type Error = RespEventNameConvertError;
     fn from_resp(value: RespValue) -> Result<Self, Self::Error> {

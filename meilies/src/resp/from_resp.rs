@@ -33,6 +33,8 @@ impl fmt::Display for RespStringConvertError {
     }
 }
 
+impl std::error::Error for RespStringConvertError {}
+
 impl FromResp for String {
     type Error = RespStringConvertError;
 
@@ -62,6 +64,8 @@ impl fmt::Display for RespIntConvertError {
     }
 }
 
+impl std::error::Error for RespIntConvertError {}
+
 impl FromResp for i64 {
     type Error = RespIntConvertError;
 
@@ -87,6 +91,8 @@ impl fmt::Display for RespBytesConvertError {
         }
     }
 }
+
+impl std::error::Error for RespBytesConvertError {}
 
 impl FromResp for Vec<u8> {
     type Error = RespBytesConvertError;
@@ -120,6 +126,8 @@ impl<E: fmt::Display> fmt::Display for RespVecConvertError<E> {
         }
     }
 }
+
+impl<E: fmt::Display + fmt::Debug> std::error::Error for RespVecConvertError<E> {}
 
 impl<T: FromResp> FromResp for Vec<T> {
     type Error = RespVecConvertError<T::Error>;

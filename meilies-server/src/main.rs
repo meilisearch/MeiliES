@@ -78,6 +78,8 @@ impl fmt::Display for Error {
     }
 }
 
+impl std::error::Error for Error {}
+
 impl From<sled::Error> for Error {
     fn from(error: sled::Error) -> Error {
         Error::InternalError(error)

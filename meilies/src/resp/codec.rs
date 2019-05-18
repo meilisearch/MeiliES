@@ -38,6 +38,8 @@ impl fmt::Display for RespMsgError {
     }
 }
 
+impl std::error::Error for RespMsgError {}
+
 impl From<io::Error> for RespMsgError {
     fn from(error: io::Error) -> RespMsgError {
         RespMsgError::IoError(error)

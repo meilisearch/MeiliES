@@ -193,6 +193,8 @@ impl fmt::Display for ProtocolError {
     }
 }
 
+impl std::error::Error for ProtocolError {}
+
 impl Stream for SubStream {
     type Item = Result<Response, String>;
     type Error = ProtocolError;
