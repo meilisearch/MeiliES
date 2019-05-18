@@ -16,7 +16,8 @@ use super::{connect, retry_strategy, SteelConnection};
 #[derive(Debug, Default)]
 struct StreamContext {
     reconnected: bool,
-    position: Option<u64>,
+    position_start: Option<u64>,
+    position_end: Option<u64>,
 }
 
 /// A tokio Stream that reconnect when the connection is lost.
@@ -47,7 +48,7 @@ impl EventStream {
 
         for (name, context) in &mut self.state {
             context.reconnected = true;
-            let stream = EsStream { name: name.clone(), from: context.position.into() };
+            let stream = EsStream { name: name.clone(), from: context.position_start.into(), to: context.position_end.into() };
             streams.push(stream);
         }
 
@@ -68,7 +69,7 @@ impl Stream for EventStream {
             Ok(Async::Ready(Some(item))) => {
                 match &item {
                     Ok(Response::Event { stream, number, .. }) => {
-                        self.state.entry(stream.clone()).or_default().position = Some(number.0 + 1);
+                        self.state.entry(stream.clone()).or_default().position_start = Some(number.0 + 1);
                     },
                     Ok(Response::Subscribed { stream }) => {
                         // if we were already subscribed to a stream and we are reconnecting
@@ -99,8 +100,9 @@ impl Sink for EventStream {
 
     fn start_send(&mut self, item: Self::SinkItem) -> Result<AsyncSink<Self::SinkItem>, Self::SinkError> {
         if let Request::Subscribe { streams } = &item {
-            for EsStream { name, from } in streams {
-                self.state.entry(name.clone()).or_default().position = (*from).into();
+            for EsStream { name, from, to } in streams {
+                self.state.entry(name.clone()).or_default().position_start = (*from).into();
+                self.state.entry(name.clone()).or_default().position_end = (*to).into();
             }
         }
 

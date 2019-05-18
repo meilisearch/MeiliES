@@ -93,6 +93,18 @@ MeiliES stores all the events of all the streams that were sent by all the clien
 So let's check that and specify to one client the point in time where we want to start reading events.
 Once there are no more events in the stream, the server starts sending events at the moment it receives them.
 
+### Stream name specification
+
+A stream name is composed as follow.
+
+`{name}{:from}{:to}`
+
+- name: the name of the stream, case sensitive, must not contain space (prefer dash-separated words).
+- from: Specifies the first event number to begin with. Optional value, if it's not set meilies will start fron the end.
+- to: Specify the last event number to send (exclusive range). Optional value, will never stop if it's not given.
+
+### Examples
+
 We can do that by prepending the start event number separated by a colon.
 
 ```bash
@@ -112,6 +124,13 @@ Try sending events to this stream and you will see: only events from the fifth o
 ```bash
 meilies-cli subscribe 'my-little-stream:5'
 ```
+
+It's also possible to read a stream until an event number.
+
+```bash
+meilies-cli subscribe 'my-little-stream:3:5'
+```
+
 
 ## Current Limitations
 
