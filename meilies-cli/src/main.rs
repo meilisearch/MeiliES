@@ -44,12 +44,12 @@ fn main() {
     };
 
     let fut = match command {
-        Request::SubscribeAll { from } => {
+        Request::SubscribeAll { range } => {
             let fut = sub_connect(addr)
                 .map_err(|e| error!("{}", e))
                 .and_then(move |(mut ctrl, msgs)| {
 
-                    ctrl.subscribe_to(EsStream::all(from));
+                    ctrl.subscribe_to(EsStream::all(range));
 
                     msgs.for_each(move |msg| {
                         match msg {

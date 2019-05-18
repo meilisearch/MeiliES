@@ -9,7 +9,7 @@ pub use self::event_number::EventNumber;
 pub use self::event_name::EventName;
 pub use self::event_data::EventData;
 pub use self::raw_event::RawEvent;
-pub use self::stream::{Stream, ParseStreamError, StartReadFrom};
+pub use self::stream::{Stream, ParseStreamError, ReadRange};
 pub use self::stream_name::{StreamName, StreamNameError};
 pub use self::stream_name::ALL_STREAMS;
 

@@ -17,7 +17,7 @@ use tokio::sync::mpsc;
 
 use meilies::reqresp::{ServerCodec, Request, Response};
 use meilies::reqresp::{RequestMsgError, ResponseMsgError};
-use meilies::stream::{RawEvent, EventNumber, Stream as EsStream, StreamName as EsStreamName, StartReadFrom};
+use meilies::stream::{RawEvent, EventNumber, Stream as EsStream, StreamName as EsStreamName, ReadRange};
 use meilies::resp::{RespMsgError, RespVecConvertError, RespBytesConvertError};
 
 fn new_event_number(numbers: &Tree, name: &EsStreamName) -> sled::Result<EventNumber> {
@@ -104,9 +104,9 @@ fn send_stream_events(
 {
     info!("blocking subscription on {} spawned", stream);
 
-    match stream.from {
-        StartReadFrom::EventNumber(num) => {
-            let mut next_number = EventNumber(num);
+    match stream.range {
+        ReadRange::ReadFrom(from) => {
+            let mut next_number = EventNumber(from);
             let mut watcher = tree.watch_prefix(vec![]);
 
             for result in tree.scan(next_number.to_be_bytes()) {
@@ -156,7 +156,65 @@ fn send_stream_events(
                 }
             }
         },
-        StartReadFrom::End => {
+        ReadRange::ReadFromUntil(from, to) => {
+            let mut next_number = EventNumber(from);
+            let to_event_number = EventNumber(to);
+            let mut watcher = tree.watch_prefix(vec![]);
+
+            for result in tree.range(next_number.to_be_bytes()..to_event_number.to_be_bytes()) {
+                let (key, value) = result?;
+                let number = EventNumber::try_from(key.as_slice()).unwrap();
+
+                let raw_event = RawEvent::new(value);
+                let event = Response::Event {
+                    stream: stream.name.clone(),
+                    number,
+                    event_name: raw_event.name().unwrap(),
+                    event_data: raw_event.data(),
+                };
+
+                match sender.send(Ok(event)).wait() {
+                    Ok(s) => sender = s,
+                    Err(_) => {
+                        info!("encountered closed channel");
+                        return Ok(());
+                    }
+                }
+
+                next_number = number.next();
+                if next_number >= to_event_number {
+                    return Ok(());
+                }
+                watcher = tree.watch_prefix(vec![]);
+            }
+
+            for event in watcher {
+                if let Event::Set(key, value) = event {
+                    let number = EventNumber::try_from(key.as_slice()).unwrap();
+                    if number >= to_event_number {
+                        return Ok(());
+                    }
+                    if number >= next_number {
+                        let raw_event = RawEvent::new(value);
+                        let event = Response::Event {
+                            stream: stream.name.clone(),
+                            number,
+                            event_name: raw_event.name().unwrap(),
+                            event_data: raw_event.data(),
+                        };
+
+                        match sender.send(Ok(event)).wait() {
+                            Ok(s) => sender = s,
+                            Err(_) => {
+                                info!("encountered closed channel");
+                                return Ok(());
+                            }
+                        }
+                    }
+                }
+            }
+        },
+        ReadRange::ReadFromEnd => {
             let watcher = tree.watch_prefix(vec![]);
 
             for event in watcher {
@@ -187,15 +245,15 @@ fn send_stream_events(
 fn handle_request(
     request: Request,
     db: Db,
-    sender: mpsc::Sender<Result<Response, String>>
+    sender: mpsc::Sender<Result<Response, String>>,
 ) -> Result<(), Error>
 {
     match request {
-        Request::SubscribeAll { from } => {
+        Request::SubscribeAll { range } => {
             let tree_names = db.tree_names().into_iter().filter(|n| n != b"__sled__default");
             let stream_strings = tree_names.into_iter().map(|b| String::from_utf8(b).unwrap());
             let stream_names = stream_strings.map(|s| EsStreamName::new(s).unwrap());
-            let all_streams: Vec<_> = stream_names.map(|n| EsStream::new(n, from)).collect();
+            let all_streams: Vec<_> = stream_names.map(|n| EsStream::new(n, range)).collect();
 
             for stream in all_streams {
                 let sender = sender.clone();

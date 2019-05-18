@@ -7,34 +7,34 @@ use crate::resp::{RespValue, FromResp, RespStringConvertError};
 use crate::stream::{StreamName, StreamNameError};
 
 #[derive(Debug, Copy, Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
-pub enum StartReadFrom {
-    EventNumber(u64),
-    End,
+pub enum ReadRange {
+   ReadFromUntil(u64, u64),
+   ReadFrom(u64),
+   ReadFromEnd,
 }
 
-impl StartReadFrom {
-    pub fn map<F: FnOnce(u64) -> u64>(self, f: F) -> StartReadFrom {
+impl ReadRange {
+    pub fn from(&self) -> Option<u64> {
         match self {
-            StartReadFrom::EventNumber(number) => StartReadFrom::EventNumber(f(number)),
-            StartReadFrom::End => StartReadFrom::End,
+            ReadRange::ReadFromUntil(from, _) | ReadRange::ReadFrom(from) => Some(*from),
+            _ => None
+        }
+    }
+
+    pub fn to(&self) -> Option<u64> {
+        match self {
+            ReadRange::ReadFromUntil(_, to) => Some(*to),
+            _ => None
         }
     }
 }
 
-impl Into<Option<u64>> for StartReadFrom {
-    fn into(self) -> Option<u64> {
+impl fmt::Display for ReadRange {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         match self {
-            StartReadFrom::EventNumber(number) => Some(number),
-            StartReadFrom::End => None,
-        }
-    }
-}
-
-impl From<Option<u64>> for StartReadFrom {
-    fn from(option: Option<u64>) -> StartReadFrom {
-        match option {
-            Some(number) => StartReadFrom::EventNumber(number),
-            None => StartReadFrom::End,
+            ReadRange::ReadFromUntil(from, to) => write!(f, ":{}:{}", from, to),
+            ReadRange::ReadFrom(from) => write!(f, ":{}", from),
+            ReadRange::ReadFromEnd => write!(f, ""),
         }
     }
 }
@@ -42,16 +42,25 @@ impl From<Option<u64>> for StartReadFrom {
 #[derive(Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub struct Stream {
     pub name: StreamName,
-    pub from: StartReadFrom,
+    pub range: ReadRange,
 }
 
 impl Stream {
-    pub fn all(from: StartReadFrom) -> Stream {
-        Stream::new(StreamName::all(), from)
+    pub fn all(range: ReadRange) -> Stream {
+        Stream::new(StreamName::all(), range)
     }
 
-    pub fn new(name: StreamName, from: StartReadFrom) -> Stream {
-        Stream { name, from }
+    pub fn new(name: StreamName, range: ReadRange) -> Stream {
+        Stream { name, range }
+    }
+
+    pub fn new_from_to(name: StreamName, from: Option<u64>, to: Option<u64>) -> Stream {
+        let range = match (from, to) {
+            (Some(from), Some(to)) => ReadRange::ReadFromUntil(from, to),
+            (Some(from), None) => ReadRange::ReadFrom(from),
+            (_, _) => ReadRange::ReadFromEnd,
+        };
+        Stream { name, range }
     }
 }
 
@@ -63,18 +72,20 @@ impl fmt::Debug for Stream {
 
 impl fmt::Display for Stream {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-        match self.from {
-            StartReadFrom::EventNumber(number) => write!(f, "{}:{}", self.name, number),
-            StartReadFrom::End => write!(f, "{}", self.name),
+        match self.range {
+            ReadRange::ReadFromUntil(from, to) => write!(f, "{}:{}:{}", self.name, from, to),
+            ReadRange::ReadFrom(from) => write!(f, "{}:{}", self.name, from),
+            ReadRange::ReadFromEnd => write!(f, "{}", self.name),
         }
     }
 }
 
 impl Into<RespValue> for Stream {
     fn into(self) -> RespValue {
-        let text = match self.from {
-            StartReadFrom::EventNumber(number) => format!("{}:{}", self.name, number),
-            StartReadFrom::End => format!("{}", self.name),
+        let text = match self.range {
+            ReadRange::ReadFromUntil(from, to) => format!("{}:{}:{}", self.name, from, to),
+            ReadRange::ReadFrom(from) => format!("{}:{}", self.name, from),
+            ReadRange::ReadFromEnd => format!("{}", self.name),
         };
 
         RespValue::BulkString(text.into_bytes())
@@ -113,7 +124,7 @@ impl FromResp for Stream {
 
 impl From<StreamName> for Stream {
     fn from(name: StreamName) -> Stream {
-        Stream { name, from: StartReadFrom::End }
+        Stream { name, range: ReadRange::ReadFromEnd }
     }
 }
 
@@ -124,17 +135,26 @@ impl FromStr for Stream {
         use ParseStreamError::*;
 
         let mut split = s.split(':');
-        match (split.next(), split.next(), split.next()) {
-            (Some(name), None, None) => {
+        match (split.next(), split.next(), split.next(), split.next()) {
+            (Some(name), None, None, None) => {
                 let name = StreamName::from_str(name).map_err(StreamNameError)?;
                 Ok(Stream::from(name))
             },
-            (Some(name), Some(from), None) => {
+            (Some(name), Some(from), None, None) => {
                 let name = StreamName::new(name.to_owned()).map_err(StreamNameError)?;
                 let number = u64::from_str_radix(from, 10).map_err(StartFromError)?;
-                Ok(Stream { name, from: StartReadFrom::EventNumber(number) })
+                Ok(Stream { name, range: ReadRange::ReadFrom(number)})
             },
-            (_, _, _) => Err(FormatError),
+            (Some(name), Some(from), Some(to), None) => {
+                let name = StreamName::new(name.to_owned()).map_err(StreamNameError)?;
+                let from = u64::from_str_radix(from, 10).map_err(StartFromError)?;
+                let to = u64::from_str_radix(to, 10).map_err(EndToError)?;
+                if from >= to {
+                    return Err(BoundsError);
+                }
+                Ok(Stream { name, range: ReadRange::ReadFromUntil(from, to) })
+            },
+            (_, _, _, _) => Err(FormatError),
         }
     }
 }
@@ -143,6 +163,8 @@ impl FromStr for Stream {
 pub enum ParseStreamError {
     StreamNameError(StreamNameError),
     StartFromError(ParseIntError),
+    EndToError(ParseIntError),
+    BoundsError,
     FormatError,
 }
 
@@ -153,7 +175,64 @@ impl fmt::Display for ParseStreamError {
         match self {
             StreamNameError(e) => write!(f, "stream not properly formatted; {}", e),
             StartFromError(e) => write!(f, "stream \"start from\" not properly formatted; {}", e),
+            EndToError(e) => write!(f, "stream \"end to\" not properly formatted; {}", e),
+            BoundsError => f.write_str("The end bound must be greater than the start bound"),
             FormatError => f.write_str("stream is not properly formatted"),
         }
     }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn create_stream_from_str() {
+        let test_stream1 = Stream::from_str("default").unwrap();
+        let test_stream2 = Stream::new(StreamName::new("default".to_owned()).unwrap(), ReadRange::ReadFromEnd);
+        assert_eq!(test_stream1, test_stream2);
+
+        let test_stream1 = Stream::from_str("default:0").unwrap();
+        let test_stream2 = Stream::new(StreamName::new("default".to_owned()).unwrap(), ReadRange::ReadFrom(0));
+        assert_eq!(test_stream1, test_stream2);
+
+        let test_stream1 = Stream::from_str("default:5").unwrap();
+        let test_stream2 = Stream::new(StreamName::new("default".to_owned()).unwrap(), ReadRange::ReadFrom(5));
+        assert_eq!(test_stream1, test_stream2);
+
+        let test_stream1 = Stream::from_str("default:0:5").unwrap();
+        let test_stream2 = Stream::new(StreamName::new("default".to_owned()).unwrap(), ReadRange::ReadFromUntil(0, 5));
+        assert_eq!(test_stream1, test_stream2);
+
+        let test_stream1 = Stream::from_str("default:1:5").unwrap();
+        let test_stream2 = Stream::new(StreamName::new("default".to_owned()).unwrap(), ReadRange::ReadFromUntil(1, 5));
+        assert_eq!(test_stream1, test_stream2);
+
+
+        let result = Stream::from_str("default:");
+        assert!(result.is_err());
+
+        let result = Stream::from_str("default:-1");
+        assert!(result.is_err());
+
+        let result = Stream::from_str("default::0");
+        assert!(result.is_err());
+
+        let result = Stream::from_str("default:0:");
+        assert!(result.is_err());
+
+        let result = Stream::from_str("default:0:");
+        assert!(result.is_err());
+
+        let result = Stream::from_str("default:0:-1");
+        assert!(result.is_err());
+
+        let result = Stream::from_str("default:0:0");
+        assert!(result.is_err());
+
+        let result = Stream::from_str("default:1:0");
+        assert!(result.is_err());
+    }
+
+
 }
