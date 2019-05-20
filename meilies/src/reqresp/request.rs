@@ -1,5 +1,5 @@
 use std::fmt;
-use crate::stream::{Stream, ReadPosition, StreamName, EventData, EventName};
+use crate::stream::{Stream, ReadPosition, StreamName, EventData, EventName, EventNumber, SnapshotRef};
 use crate::stream::ALL_STREAMS;
 use crate::resp::{RespValue, FromResp};
 
@@ -9,6 +9,8 @@ pub enum Request {
     Subscribe { streams: Vec<Stream> },
     Publish { stream: StreamName, event_name: EventName, event_data: EventData },
     LastEventNumber { stream: StreamName },
+    RequestSnapshot { stream: StreamName, number: EventNumber },
+    PublishSnapshot { stream: StreamName, snapshot_ref: SnapshotRef, data: EventData },
     StreamNames,
 }
 
@@ -39,6 +41,21 @@ impl Into<RespValue> for Request {
                 RespValue::Array(vec![
                     RespValue::bulk_string(&"last-event-number"[..]),
                     RespValue::bulk_string(stream.to_string()),
+                ])
+            },
+            Request::RequestSnapshot { stream, number } => {
+                RespValue::Array(vec![
+                    RespValue::bulk_string(&"snapshot-request"[..]),
+                    RespValue::bulk_string(stream.to_string()),
+                    RespValue::Integer(number.0 as i64),
+                ])
+            },
+            Request::PublishSnapshot { stream, snapshot_ref, data } => {
+                RespValue::Array(vec![
+                    RespValue::bulk_string(&"publish-snapshot"[..]),
+                    RespValue::bulk_string(stream.to_string()),
+                    snapshot_ref.into(),
+                    RespValue::bulk_string(data.0),
                 ])
             },
             Request::StreamNames => {
@@ -130,6 +147,41 @@ impl FromResp for Request {
 
                 Ok(Request::LastEventNumber { stream })
             },
+            "snapshot-request" => {
+                let stream = iter.next().map(StreamName::from_resp)
+                    .ok_or(MissingArgument)?
+                    .map_err(|_| InvalidArgumentRespType)?;
+
+                let number = iter.next().map(EventNumber::from_resp)
+                    .ok_or(MissingArgument)?
+                    .map_err(|_| InvalidArgumentRespType)?;
+
+                if iter.next().is_some() {
+                    return Err(TooManyArguments)
+                }
+
+                Ok(Request::RequestSnapshot { stream, number })
+            },
+            "publish-snapshot" => {
+                let stream = iter.next().map(StreamName::from_resp)
+                    .ok_or(MissingArgument)?
+                    .map_err(|_| InvalidArgumentRespType)?;
+
+                let snapshot_ref = iter.next().map(SnapshotRef::from_resp)
+                    .ok_or(MissingArgument)?
+                    .map_err(|_| InvalidArgumentRespType)?;
+
+                let data = iter.next().map(EventData::from_resp)
+                    .ok_or(MissingArgument)?
+                    .map_err(|_| InvalidArgumentRespType)?;
+
+                if iter.next().is_some() {
+                    return Err(TooManyArguments)
+                }
+
+                Ok(Request::PublishSnapshot { stream, snapshot_ref, data })
+            },
+
             "stream-names" => {
                 Ok(Request::StreamNames)
             }

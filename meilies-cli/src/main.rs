@@ -103,6 +103,12 @@ fn main() {
 
             Box::new(fut) as Box<dyn Future<Item=(), Error=()> + Send>
         },
+        Request::RequestSnapshot { stream, number } => {
+            unreachable!("TODO")
+        },
+        Request::PublishSnapshot { stream, snapshot_ref, data } => {
+            unreachable!("TODO")
+        },
         Request::LastEventNumber { stream } => {
             let fut = paired_connect(addr)
                 .map_err(|e| error!("{}", e))

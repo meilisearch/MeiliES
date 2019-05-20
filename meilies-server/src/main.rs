@@ -1,4 +1,5 @@
-use std::convert::TryFrom;
+
+
 use std::fmt;
 use std::io::{Error as IoError, ErrorKind};
 use std::net::SocketAddr;
@@ -7,8 +8,8 @@ use std::sync::Arc;
 use std::thread;
 use std::time::Instant;
 
-use log::{info, error};
-use sled::{Db, Tree, IVec, Event, ConfigBuilder};
+use log::{info, error, warn};
+
 use structopt::StructOpt;
 use tokio::codec::Decoder;
 use tokio::net::TcpListener;
@@ -17,19 +18,10 @@ use tokio::sync::mpsc;
 
 use meilies::reqresp::{ServerCodec, Request, Response};
 use meilies::reqresp::{RequestMsgError, ResponseMsgError};
-use meilies::stream::{RawEvent, EventNumber, Stream as EsStream, StreamName as EsStreamName, ReadPosition};
+use meilies::stream::{EventNumber, Stream as EsStream, StreamName as EsStreamName, ReadPosition};
 use meilies::resp::{RespMsgError, RespVecConvertError, RespBytesConvertError};
 
-fn new_event_number(numbers: &Tree, name: &EsStreamName) -> sled::Result<EventNumber> {
-    let new_value = numbers.update_and_fetch(name, |previous| {
-        let previous = previous.map(|s| EventNumber::try_from(s).unwrap());
-        let new = previous.map_or(EventNumber::zero(), EventNumber::next);
-        let slice = &new.to_be_bytes()[..];
-        Some(IVec::from(slice))
-    })?;
-
-    Ok(EventNumber::try_from(new_value.unwrap().as_ref()).unwrap())
-}
+use meilies_server::{StreamStore, StoreConfigBuilder};
 
 #[derive(Debug, StructOpt)]
 #[structopt(name = "meilies-server", about = "Start the server")]
@@ -45,6 +37,12 @@ struct Opt {
     /// Specify the zstd compression factor (irreversible)
     #[structopt(long = "compression-factor")]
     compression_factor: Option<i32>,
+
+    /// Specify the frequency of snapshot are created
+    ///
+    /// Optional. By default they will be no other snapshots
+    #[structopt(long = "snapshot-frequency")]
+    snapshot_frequency: Option<usize>,
 
     /// Disable vigil initialization.
     #[structopt(long = "no-vigil")]
@@ -100,163 +98,43 @@ impl From<IoError> for Error {
 
 fn send_stream_events(
     stream: EsStream,
-    tree: Arc<Tree>,
-    mut sender: mpsc::Sender<Result<Response, String>>,
+    store: Arc<StreamStore>,
+    sender: mpsc::Sender<Result<Response, String>>,
 ) -> sled::Result<()>
 {
     info!("blocking subscription on {} spawned", stream);
 
     match (stream.from, stream.to) {
-        (ReadPosition::EventNumber(num), None) => {
-            let mut next_number = EventNumber(num);
-            let mut watcher = tree.watch_prefix(vec![]);
-
-            for result in tree.scan(next_number.to_be_bytes()) {
-                let (key, value) = result?;
-                let number = EventNumber::try_from(key.as_slice()).unwrap();
-
-                let raw_event = RawEvent::new(value);
-                let event = Response::Event {
-                    stream: stream.name.clone(),
-                    number,
-                    event_name: raw_event.name().unwrap(),
-                    event_data: raw_event.data(),
-                };
-
-                match sender.send(Ok(event)).wait() {
-                    Ok(s) => sender = s,
-                    Err(_) => {
-                        info!("encountered closed channel");
-                        return Ok(());
-                    }
-                }
-
-                next_number = number.next();
-                watcher = tree.watch_prefix(vec![]);
-            }
-
-            for event in watcher {
-                if let Event::Set(key, value) = event {
-                    let number = EventNumber::try_from(key.as_slice()).unwrap();
-                    if number >= next_number {
-                        let raw_event = RawEvent::new(value);
-                        let event = Response::Event {
-                            stream: stream.name.clone(),
-                            number,
-                            event_name: raw_event.name().unwrap(),
-                            event_data: raw_event.data(),
-                        };
-
-                        match sender.send(Ok(event)).wait() {
-                            Ok(s) => sender = s,
-                            Err(_) => {
-                                info!("encountered closed channel");
-                                return Ok(());
-                            }
-                        }
-                    }
-                }
-            }
-        },
-        (ReadPosition::EventNumber(num), Some(to)) => {
-            let mut next_number = EventNumber(num);
-            let to_event_number = EventNumber(to);
-            let mut watcher = tree.watch_prefix(vec![]);
-
-            for result in tree.range(next_number.to_be_bytes()..to_event_number.to_be_bytes()) {
-                let (key, value) = result?;
-                let number = EventNumber::try_from(key.as_slice()).unwrap();
-
-                let raw_event = RawEvent::new(value);
-                let event = Response::Event {
-                    stream: stream.name.clone(),
-                    number,
-                    event_name: raw_event.name().unwrap(),
-                    event_data: raw_event.data(),
-                };
-
-                match sender.send(Ok(event)).wait() {
-                    Ok(s) => sender = s,
-                    Err(_) => {
-                        info!("encountered closed channel");
-                        return Ok(());
-                    }
-                }
-
-                next_number = number.next();
-                watcher = tree.watch_prefix(vec![]);
-            }
-
-            for event in watcher {
-                if let Event::Set(key, value) = event {
-                    let number = EventNumber::try_from(key.as_slice()).unwrap();
-                    if number >= to_event_number {
-                        return Ok(());
-                    }
-                    if number >= next_number {
-                        let raw_event = RawEvent::new(value);
-                        let event = Response::Event {
-                            stream: stream.name.clone(),
-                            number,
-                            event_name: raw_event.name().unwrap(),
-                            event_data: raw_event.data(),
-                        };
-
-                        match sender.send(Ok(event)).wait() {
-                            Ok(s) => sender = s,
-                            Err(_) => {
-                                info!("encountered closed channel");
-                                return Ok(());
-                            }
-                        }
-                    }
-                }
+        (ReadPosition::EventNumber(from), to) => {
+            if let Err(err) = store.subscribe_to(stream.name.as_str(), from, to, sender) {
+                warn!("Error during susbcription; {:?}", err);
             }
         },
         (ReadPosition::End, _) => {
-            let watcher = tree.watch_prefix(vec![]);
-
-            for event in watcher {
-                if let Event::Set(key, value) = event {
-                    let raw_event = RawEvent::new(value);
-                    let event = Response::Event {
-                        stream: stream.name.clone(),
-                        number: EventNumber::try_from(key.as_slice()).unwrap(),
-                        event_name: raw_event.name().unwrap(),
-                        event_data: raw_event.data(),
-                    };
-
-                    match sender.send(Ok(event)).wait() {
-                        Ok(s) => sender = s,
-                        Err(_) => {
-                            info!("encountered closed channel");
-                            return Ok(());
-                        }
-                    }
-                }
+            if let Err(err) = store.send_subscribed(stream.name.as_str(), 0, None, sender) {
+                warn!("Error during susbcription from end; {:?}", err);
             }
         },
     }
 
     Ok(())
 }
-
 fn handle_request(
     request: Request,
-    db: Db,
+    store: Arc<StreamStore>,
     sender: mpsc::Sender<Result<Response, String>>
 ) -> Result<(), Error>
 {
+    info!("handle request");
     match request {
         Request::SubscribeAll { from, to } => {
-            let tree_names = db.tree_names().into_iter().filter(|n| n != b"__sled__default");
-            let stream_strings = tree_names.into_iter().map(|b| String::from_utf8(b).unwrap());
-            let stream_names = stream_strings.map(|s| EsStreamName::new(s).unwrap());
-            let all_streams: Vec<_> = stream_names.map(|n| EsStream::new(n, from, to)).collect();
+            let streams = store.get_stream_names().into_iter()
+                .filter_map(|n| EsStreamName::new(n).ok())
+                .map(|n| EsStream::new(n, from, to));
 
-            for stream in all_streams {
+            for stream in streams {
                 let sender = sender.clone();
-                let tree = db.open_tree(stream.name.clone().into_bytes())?;
+                let store = store.clone();
 
                 thread::Builder::new().spawn(|| {
                     let mut sender = sender;
@@ -265,14 +143,14 @@ fn handle_request(
                     match sender.send(Ok(subscribed)).wait() {
                         Ok(s) => sender = s,
                         Err(_) => {
-                            info!("encountered closed channel");
+                            warn!("encountered closed channel");
                             return;
-                        },
+                        }
                     }
 
-                    if let Err(e) = send_stream_events(stream, tree, sender.clone()) {
+                    if let Err(e) = send_stream_events(stream, store, sender.clone()) {
                         if let Err(_) = sender.send(Err(e.to_string())).wait() {
-                            info!("encountered closed channel");
+                            warn!("encountered closed channel");
                             return;
                         }
                     }
@@ -282,7 +160,7 @@ fn handle_request(
         Request::Subscribe { streams } => {
             for stream in streams {
                 let sender = sender.clone();
-                let tree = db.open_tree(stream.name.clone().into_bytes())?;
+                let store = store.clone();
 
                 thread::Builder::new().spawn(|| {
                     let mut sender = sender;
@@ -293,10 +171,10 @@ fn handle_request(
                         Err(_) => {
                             info!("encountered closed channel");
                             return;
-                        },
+                        }
                     }
 
-                    if let Err(e) = send_stream_events(stream, tree, sender.clone()) {
+                    if let Err(e) = send_stream_events(stream, store, sender.clone()) {
                         if let Err(_) = sender.send(Err(e.to_string())).wait() {
                             info!("encountered closed channel");
                             return;
@@ -306,45 +184,45 @@ fn handle_request(
             }
         },
         Request::Publish { stream, event_name, event_data } => {
-            let tree = db.open_tree(stream.clone().into_bytes())?;
-
-            let event_number = new_event_number(&db, &stream)?;
-            let raw_length = event_name.as_str().len().to_be_bytes();
-            let raw_name = event_name.as_str().as_bytes();
-            let raw_data = event_data.0;
-
-            let mut raw_event = Vec::new();
-            raw_event.extend_from_slice(&raw_length);
-            raw_event.extend_from_slice(&raw_name);
-            raw_event.extend_from_slice(&raw_data);
-
-            if let Err(e) = tree.set(event_number.to_be_bytes(), raw_event) {
-                return Err(Error::InternalError(e))
-            }
-
-            info!("{:?} {:?} {:?}", stream, event_name, event_number);
-
-            if sender.send(Ok(Response::Ok)).wait().is_err() {
-                info!("encountered closed channel");
+            if let Err(e) = store.save_event(stream.as_str(), event_name.as_str(), event_data.0) {
+                if let Err(_) = sender.send(Err(e.to_string())).wait() {
+                    warn!("Error during pushing a new event; {:?}", e);
+                }
+            } else {
+                if sender.send(Ok(Response::Ok)).wait().is_err() {
+                    warn!("encountered closed channel");
+                }
             }
         },
+        Request::RequestSnapshot { stream, number } => {
+            unreachable!("TODO")
+        },
+        Request::PublishSnapshot { stream, snapshot_ref, data } => {
+            unreachable!("TODO")
+        },
         Request::LastEventNumber { stream } => {
-            let key = db.get(&stream)?;
-            let number = key.map(|k| EventNumber::try_from(k.as_ref()).unwrap());
+            let response = match store.last_event_number(stream.as_str())? {
+                Some(v) => {
+                    let number = EventNumber(v);
+                    Response::LastEventNumber { stream: stream, number: Some(number) }
+                },
+                None => {
+                    Response::LastEventNumber { stream: stream, number: None }
+                }
+            };
 
-            let last_event_number = Response::LastEventNumber { stream, number };
-            if sender.send(Ok(last_event_number)).wait().is_err() {
-                info!("encountered closed channel");
+            if sender.send(Ok(response)).wait().is_err() {
+                warn!("encountered closed channel");
             }
         },
         Request::StreamNames => {
-            let tree_names = db.tree_names().into_iter().filter(|n| n != b"__sled__default");
-            let stream_strings = tree_names.into_iter().map(|b| String::from_utf8(b).unwrap());
-            let stream_names = stream_strings.map(|s| EsStreamName::new(s).unwrap()).collect();
+            let stream_names = store.get_stream_names().into_iter()
+                .filter_map(|n| EsStreamName::new(n).ok()).collect();
+
             let streams = Response::StreamNames { streams: stream_names };
 
             if sender.send(Ok(streams)).wait().is_err() {
-                info!("encountered closed channel");
+                warn!("encountered closed channel");
             }
         }
     }
@@ -409,18 +287,18 @@ fn main() {
 
     let now = Instant::now();
 
-    let mut builder = ConfigBuilder::new().path(opt.db_path);
+    let mut builder = StoreConfigBuilder::new();
 
     if let Some(compression_factor) = opt.compression_factor {
-        builder = builder.use_compression(true).compression_factor(compression_factor);
+        builder = builder.compression_factor(compression_factor);
     }
 
-    let config = builder.build();
+    if let Some(snapshot_frequency) = opt.snapshot_frequency {
+        builder = builder.snapshot_min_frequency(snapshot_frequency);
+    }
 
-    let db = match Db::start(config) {
-        Ok(db) => db,
-        Err(e) => return error!("error opening database; {}", e),
-    };
+    let store = Arc::new(StreamStore::new(opt.db_path, builder.build()).unwrap());
+
     info!("kv-store loaded in {:.2?}", now.elapsed());
 
     let listener = match TcpListener::bind(&addr) {
@@ -439,13 +317,13 @@ fn main() {
 
             let error_sender = sender.clone();
 
-            let db = db.clone();
+            let store = store.clone();
             let requests = reader
                 .map_err(Error::RequestMsgError)
                 .for_each(move |request| {
-                    let db = db.clone();
+                    let store = store.clone();
                     let sender = sender.clone();
-                    future::result(handle_request(request, db, sender))
+                    future::result(handle_request(request, store, sender))
                 })
                 .or_else(move |error| {
                     error!("error; {}", error);
