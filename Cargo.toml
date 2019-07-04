@@ -1,8 +1,9 @@
 [workspace]
 members = [
     "meilies",
-    "meilies-client",
     "meilies-cli",
+    "meilies-client",
+    "meilies-inspect",
     "meilies-server",
     "meilies-transhumance",
 ]
