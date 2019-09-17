@@ -31,6 +31,27 @@ impl Encoder for ClientCodec {
     }
 }
 
+impl futures_codec::Decoder for ClientCodec {
+    type Item = Result<Response, String>;
+    type Error = ResponseMsgError;
+
+    fn decode(&mut self, buf: &mut BytesMut) -> Result<Option<Self::Item>, Self::Error> {
+        match RespCodec.decode(buf)? {
+            Some(value) => Ok(Some(FromResp::from_resp(value)?)),
+            None => Ok(None),
+        }
+    }
+}
+
+impl futures_codec::Encoder for ClientCodec {
+    type Item = Request;
+    type Error = RequestMsgError;
+
+    fn encode(&mut self, msg: Self::Item, buf: &mut BytesMut) -> Result<(), Self::Error> {
+        Ok(RespCodec.encode(msg.into(), buf)?)
+    }
+}
+
 #[derive(Debug, Default)]
 pub struct ServerCodec;
 

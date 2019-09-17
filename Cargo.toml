@@ -1,6 +1,7 @@
 [workspace]
 members = [
     "meilies",
+    "meilies-async-cli",
     "meilies-cli",
     "meilies-client",
     "meilies-inspect",

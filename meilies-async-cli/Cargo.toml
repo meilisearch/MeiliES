@@ -1,0 +1,16 @@
+[package]
+name = "meilies-async-cli"
+version = "0.1.0"
+authors = ["Clément Renault <clement@meilisearch.com>"]
+edition = "2018"
+
+[dependencies]
+async-std = "0.99.5"
+bytes = "0.4.12"
+futures-preview = "0.3.0-alpha.18"
+futures-timer = "0.4.0"
+meilies = { version = "0.2.0", path = "../meilies" }
+
+[dependencies.futures_codec]
+git = "https://github.com/matthunz/futures-codec.git"
+rev = "5f492b7"
