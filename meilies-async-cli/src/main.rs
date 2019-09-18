@@ -34,10 +34,19 @@ async fn initiate_connection(
     stream: TcpStream,
     creceiver: &mut mpsc::Receiver<Request>,
     ssender: &mut mpsc::Sender<io::Result<Result<Response, String>>>,
+    subscriptions: &mut HashMap<StreamName, (Option<u64>, Option<u64>)>,
 ) -> async_std::io::Result<()>
 {
     let framed = Framed::new(stream, ClientCodec);
     let (mut ssink, sstream) = framed.split();
+
+    // initiate subscriptions
+    let mut streams = Vec::with_capacity(subscriptions.len());
+    for (name, (from, to)) in subscriptions.iter() {
+        let stream = EsStream::new_from_to(name.clone(), *from, *to);
+        streams.push(stream);
+    }
+    ssink.send(Request::Subscribe { streams }).await.map_err(into_io_error)?;
 
     let duration = Duration::from_secs(3);
     let pings = Interval::new(duration).map(|_| Request::StreamNames);
@@ -46,8 +55,6 @@ async fn initiate_connection(
     let tosend = stream::select(pings, creceiver).map(Either::Left);
     let received = sstream.map(Either::Right);
     let mut events = stream::select(tosend, received);
-
-    let mut subscriptions = HashMap::new();
 
     while let Some(either) = events.next().await {
         match either {
@@ -79,7 +86,7 @@ async fn initiate_connection(
                 // in case of re-subscription, we must subscribe from the next event number
                 if let Ok(Response::Event { ref stream, ref number, .. }) = message {
                     let (_, to) = subscriptions.remove(&stream).unwrap_or_default();
-                    let range = (Some(number.0), to);
+                    let range = (Some(number.0 + 1), to);
                     subscriptions.insert(stream.clone(), range);
                 }
 
@@ -122,7 +129,7 @@ impl Iterator for Fibonacci {
 fn new_backoff() -> impl Iterator<Item=u32> {
     use std::iter::{once, repeat};
     // fib(21) = 10946
-    once(0).chain(Fibonacci::new()).take(21).chain(repeat(21))
+    once(0).chain(Fibonacci::new().take(21)).chain(repeat(21))
 }
 
 async fn new_stream_connection(
@@ -138,6 +145,7 @@ async fn new_stream_connection(
         let mut ssender = ssender;
         let mut creceiver = creceiver;
         let mut backoff = new_backoff();
+        let mut subs = HashMap::new();
 
         while let Some(mul) = backoff.next() {
             println!("Retrying connection with {}", addr);
@@ -160,7 +168,7 @@ async fn new_stream_connection(
             println!("Connected to {}", addr);
             let _ = mem::replace(&mut backoff, new_backoff());
 
-            if let Err(e) = initiate_connection(stream, &mut creceiver, &mut ssender).await {
+            if let Err(e) = initiate_connection(stream, &mut creceiver, &mut ssender, &mut subs).await {
                 if let Err(e) = ssender.send(Err(e)).await {
                     if e.is_disconnected() { break }
                     if e.is_full() { eprintln!("{}", e) }
