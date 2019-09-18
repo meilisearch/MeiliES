@@ -2,9 +2,9 @@ use std::net::ToSocketAddrs;
 
 use meilies::stream::Stream as EsStream;
 use meilies::reqresp::Response;
-use meilies_client::{sub_connect, paired_connect};
-use futures::{Future, Stream, future};
-use futures::future::Either;
+use meilies_client::{sub_connect, PairedConnection};
+use futures::executor::ThreadPool;
+use futures::StreamExt;
 use structopt::StructOpt;
 use log::{info, error};
 
@@ -48,40 +48,29 @@ fn main() {
         return error!("the source and destination can not be the same")
     }
 
-    let fut = sub_connect(src_server)
-        .map_err(|e| error!("{}", e))
-        .and_then(move |(mut ctrl, msgs)| {
-            for stream in opt.streams {
-                ctrl.subscribe_to(stream);
+    let pool = ThreadPool::new().unwrap();
+
+    pool.clone().run(async move {
+        let (mut ctrl, mut stream) = sub_connect(&pool, src_server).await.unwrap();
+
+        for stream in opt.streams {
+            ctrl.subscribe_to(stream).await.unwrap();
+        }
+
+        let mut dst_conn = PairedConnection::connect(&dst_server).await.unwrap();
+
+        while let Some(msg) = stream.next().await {
+            match msg {
+                Ok(Ok(Response::Event { stream, number, event_name, event_data })) => {
+                    info!("{:?} {:?} {:?}", stream, event_name, number);
+                    dst_conn = dst_conn.publish(stream, event_name, event_data).await.unwrap();
+                },
+                Ok(Ok(otherwise)) => println!("{:?}", otherwise),
+                Ok(Err(e)) => error!("{}", e),
+                Err(e) => error!("{}", e),
             }
+        }
 
-            paired_connect(dst_server)
-                .map_err(|e| error!("{}", e))
-                .and_then(|dst_conn| {
-                    msgs
-                        .map_err(|e| error!("{}", e))
-                        .fold(dst_conn, move |dst_conn, msg| {
-                            match msg {
-                                Ok(Response::Event { stream, number, event_name, event_data }) => {
-                                    info!("{:?} {:?} {:?}", stream, event_name, number);
-                                    Either::A(dst_conn.publish(stream, event_name, event_data)
-                                                      .map_err(|e| error!("{}", e)))
-                                },
-                                Ok(response) => {
-                                    info!("{:?}", response);
-                                    Either::B(future::ok(dst_conn))
-                                },
-                                Err(error) => {
-                                    error!("{}", error);
-                                    Either::B(future::ok(dst_conn))
-                                },
-                            }
-                        })
-                })
-        })
-        .and_then(|_| {
-            Err(println!("Connection closed by the server"))
-        });
-
-    tokio::run(fut);
+        println!("Connection closed by the server");
+    });
 }

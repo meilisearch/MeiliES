@@ -44,17 +44,14 @@ fn main() {
         Err(e) => return error!("{}", e),
     };
 
-    let mut pool = ThreadPool::new().unwrap();
-    let cloned_pool = pool.clone();
+    let pool = ThreadPool::new().unwrap();
 
-    pool.run(async move {
-        let pool = cloned_pool;
-
+    pool.clone().run(async move {
         match command {
             Request::SubscribeAll { range } => {
                 let (mut ctrl, mut stream) = sub_connect(&pool, addr).await.unwrap();
 
-                ctrl.subscribe_to(EsStream::all(range));
+                ctrl.subscribe_to(EsStream::all(range)).await.unwrap();
 
                 while let Some(msg) = stream.next().await {
                     match msg {
@@ -69,7 +66,7 @@ fn main() {
                 let (mut ctrl, mut stream) = sub_connect(&pool, addr).await.unwrap();
 
                 for stream in streams {
-                    ctrl.subscribe_to(stream);
+                    ctrl.subscribe_to(stream).await.unwrap();
                 }
 
                 while let Some(msg) = stream.next().await {
