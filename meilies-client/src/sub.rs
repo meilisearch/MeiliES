@@ -1,203 +1,175 @@
 use std::collections::HashMap;
+use std::{fmt, mem};
 use std::net::SocketAddr;
-use std::{fmt, io};
+use std::pin::Pin;
+use std::time::{Instant, Duration};
 
-use futures::{Future, Poll, Async, AsyncSink, Stream, Sink};
+use async_std::io;
+use async_std::net::TcpStream;
+
+use futures::channel::mpsc;
+use futures::executor::ThreadPool;
+use futures::future::Either;
+use futures::sink::SinkExt;
+use futures::stream::{Stream, StreamExt, FusedStream};
+use futures::stream;
+use futures::task::{Poll, Context};
+
+use futures_codec::Framed;
+use futures_timer::Interval;
+
 use log::{error, warn};
-use meilies::resp::RespMsgError;
-use meilies::reqresp::{Request, RequestMsgError, Response, ResponseMsgError};
-use meilies::stream::{Stream as EsStream, StreamName};
-use tokio::sync::mpsc;
-use futures::stream::SplitStream;
-use tokio_retry::Retry;
 
-use super::{connect, retry_strategy, SteelConnection};
+use meilies::reqresp::{ClientCodec, Request, Response};
+use meilies::stream::{StreamName, Stream as EsStream};
 
-#[derive(Debug, Default)]
-struct StreamContext {
-    reconnected: bool,
-    position_start: Option<u64>,
-    position_end: Option<u64>,
+fn into_io_error(error: impl fmt::Display) -> std::io::Error {
+    io::Error::new(io::ErrorKind::Other, error.to_string())
 }
 
-/// A tokio Stream that reconnect when the connection is lost.
-///
-/// It preferable to use `sub_connect` to get a `SubController` and `SubStream` tuple.
-pub struct EventStream {
-    state: HashMap<StreamName, StreamContext>,
-    connection: SteelConnection,
-}
+async fn inner_connect(
+    stream: TcpStream,
+    creceiver: &mut mpsc::Receiver<Request>,
+    ssender: &mut mpsc::Sender<io::Result<Result<Response, String>>>,
+    subscriptions: &mut HashMap<StreamName, (Option<u64>, Option<u64>)>,
+) -> async_std::io::Result<()>
+{
+    let framed = Framed::new(stream, ClientCodec);
+    let (mut ssink, sstream) = framed.split();
 
-impl EventStream {
-    fn connect(addr: SocketAddr) -> impl Future<Item=EventStream, Error=tokio_retry::Error<io::Error>> {
-        Retry::spawn(retry_strategy(), move || {
-            warn!("Connecting to {}", addr);
-            connect(&addr)
-                .map(move |connection| {
-                    let connection = SteelConnection::new(addr, connection);
-                    EventStream { state: HashMap::new(), connection }
-                })
-        })
+    // initiate subscriptions
+    let mut streams = Vec::with_capacity(subscriptions.len());
+    for (name, (from, to)) in subscriptions.iter() {
+        let stream = EsStream::new_from_to(name.clone(), *from, *to);
+        streams.push(stream);
     }
+    ssink.send(Request::Subscribe { streams }).await.map_err(into_io_error)?;
 
-    fn send_stream_subscriptions(&mut self) -> Result<(), ProtocolError> {
-        // Now that a new connection has been successfully established
-        // we can re-send our subscriptions with the appropriate event number.
+    let duration = Duration::from_secs(20);
+    let pings = Interval::new(duration).map(|_| Request::StreamNames);
+    let mut last_message = Instant::now();
 
-        let mut streams = Vec::with_capacity(self.state.len());
+    let tosend = stream::select(pings, creceiver).map(Either::Left);
+    let received = sstream.map(Either::Right);
+    let mut events = stream::select(tosend, received);
 
-        for (name, context) in &mut self.state {
-            context.reconnected = true;
-            let stream = EsStream::new_from_to(name.clone(), context.position_start.into(), context.position_end.into());
-            streams.push(stream);
-        }
-
-        let subscription = Request::Subscribe { streams };
-        self.start_send(subscription)?;
-        self.poll_complete()?;
-
-        Ok(())
-    }
-}
-
-impl Stream for EventStream {
-    type Item = Result<Response, String>;
-    type Error = ProtocolError;
-
-    fn poll(&mut self) -> Result<Async<Option<Self::Item>>, Self::Error> {
-        let result = match self.connection.poll() {
-            Ok(Async::Ready(Some(item))) => {
-                match &item {
-                    Ok(Response::Event { stream, number, .. }) => {
-                        self.state.entry(stream.clone()).or_default().position_start = Some(number.0 + 1);
-                    },
-                    Ok(Response::Subscribed { stream }) => {
-                        // if we were already subscribed to a stream and we are reconnecting
-                        // we do not return the message validating a subscription to the user
-                        if self.state.get(&stream).map_or(false, |c| c.reconnected) {
-                            return self.poll();
-                        }
-                    },
-                    _otherwise => (),
+    while let Some(either) = events.next().await {
+        match either {
+            // messages to send to the server, comming either
+            // from the client or after a timeout (ping)
+            Either::Left(message) => {
+                // do not send a ping if a message has been sent recently
+                if message == Request::StreamNames && last_message.elapsed() < duration {
+                    continue
                 }
 
-                Ok(Async::Ready(Some(item)))
-            },
-            otherwise => otherwise,
-        };
+                // save that new subscription in case that meilies-server stop responding
+                // and did not sent us any event. This way we will be able to re-subscribe.
+                if let Request::Subscribe { ref streams } = message {
+                    for EsStream { name, range } in streams {
+                        let range = (range.from(), range.to());
+                        subscriptions.insert(name.clone(), range);
+                    }
+                }
 
-        if self.connection.has_been_reconnected() {
-            self.send_stream_subscriptions()?;
+                ssink.send(message).await.map_err(into_io_error)?
+            },
+            // messages received from the server and
+            // to forward to the client
+            Either::Right(message) => {
+                let message = message.map_err(into_io_error)?;
+
+                // If we receive a new event we should store it event number this way,
+                // in case of re-subscription, we must subscribe from the next event number
+                if let Ok(Response::Event { ref stream, ref number, .. }) = message {
+                    let (_, to) = subscriptions.remove(&stream).unwrap_or_default();
+                    let range = (Some(number.0 + 1), to);
+                    subscriptions.insert(stream.clone(), range);
+                }
+
+                if let Err(error) = ssender.send(Ok(message)).await {
+                    // user disconnect the SubStream
+                    if error.is_disconnected() { break }
+                    if error.is_full() { warn!("{}", error); }
+                }
+            },
         }
 
-        result.map_err(ProtocolError::ResponseMsgError)
+        last_message = Instant::now();
     }
+
+    Ok(())
 }
 
-impl Sink for EventStream {
-    type SinkItem = Request;
-    type SinkError = ProtocolError;
+pub async fn sub_connect(
+    pool: &ThreadPool,
+    addr: SocketAddr,
+) -> io::Result<(SubController, SubStream)>
+{
+    // 'c' stands for client and 's' stands for server
+    let (csender, creceiver) = mpsc::channel(100); // SubController -> this reactor
+    let (ssender, sreceiver) = mpsc::channel(100); // this reactor -> SubStream
 
-    fn start_send(&mut self, item: Self::SinkItem) -> Result<AsyncSink<Self::SinkItem>, Self::SinkError> {
-        if let Request::Subscribe { streams } = &item {
-            for EsStream { name, range } in streams {
-                self.state.entry(name.clone()).or_default().position_start = range.from();
-                self.state.entry(name.clone()).or_default().position_end = range.to();
+    pool.spawn_ok(async move {
+        let mut creceiver = creceiver;
+        let mut ssender = ssender;
+        let mut subs = HashMap::new();
+        let mut backoff = crate::backoff::new();
+
+        loop {
+            let result = match TcpStream::connect(addr).await {
+                Ok(stream) => {
+                    backoff = crate::backoff::new();
+                    inner_connect(stream, &mut creceiver, &mut ssender, &mut subs).await
+                },
+                Err(e) => Err(e),
+            };
+
+            if let Err(e) = result {
+                if let Err(e) = ssender.send(Err(e)).await {
+                    // user disconnect the SubStream
+                    if e.is_disconnected() { return }
+                    if e.is_full() { warn!("{}", e) }
+                }
+            }
+
+            if let Some(mul) = backoff.next() {
+                let dur = Duration::from_millis(100) * mul;
+                let _ = futures_timer::Delay::new(dur).await;
+                warn!("Retrying connection with {}", addr);
             }
         }
 
-        let result = self.connection.start_send(item);
+        error!("Could not connect to {}", addr);
+    });
 
-        if self.connection.has_been_reconnected() {
-            self.send_stream_subscriptions()?;
-        }
-
-        result.map_err(ProtocolError::RequestMsgError)
-    }
-
-    fn poll_complete(&mut self) -> Result<Async<()>, Self::SinkError> {
-        let result = self.connection.poll_complete();
-
-        if self.connection.has_been_reconnected() {
-            self.send_stream_subscriptions()?;
-        }
-
-        result.map_err(ProtocolError::RequestMsgError)
-    }
+    let controller = SubController(csender);
+    let stream = SubStream(sreceiver);
+    Ok((controller, stream))
 }
 
-/// Open a sup connection with a server.
-pub fn sub_connect(
-    addr: SocketAddr
-) -> impl Future<Item=(SubController, SubStream), Error=tokio_retry::Error<io::Error>>
-{
-    EventStream::connect(addr)
-        .map_err(|e| dbg!(e))
-        .map(|connection| {
-            let (writer, reader) = connection.split();
-            let (sender, receiver) = mpsc::unbounded_channel();
-
-            let x = receiver
-                .map_err(|e| {
-                    let error = RespMsgError::IoError(io::Error::new(io::ErrorKind::BrokenPipe, e));
-                    ProtocolError::RequestMsgError(RequestMsgError::RespMsgError(error))
-                })
-                .map(Into::into)
-                .forward(writer)
-                .map_err(|e| error!("{:?}", e))
-                .map(|_| ());
-
-            tokio::spawn(x);
-
-            let controller = SubController { sender };
-            let sub_stream = SubStream { connection: reader };
-
-            (controller, sub_stream)
-        })
-}
-
-/// A sub controller control which streams to connect to.
 #[derive(Clone)]
-pub struct SubController {
-    sender: mpsc::UnboundedSender<Request>,
-}
+pub struct SubController(mpsc::Sender<Request>);
 
 impl SubController {
-    /// Ask the server to send events of the given stream.
-    pub fn subscribe_to(&mut self, stream: EsStream) {
-        let command = Request::Subscribe { streams: vec![stream] };
-
-        if let Err(e) = self.sender.try_send(command) {
-            error!("{}", e);
-        }
+    pub async fn subscribe_to(&mut self, stream: EsStream) -> Result<(), ()> {
+        let request = Request::Subscribe { streams: vec![stream] };
+        self.0.send(request).await.map_err(drop)
     }
 }
 
-/// A tokio Stream that returns every event received on all subscribed streams.
-pub struct SubStream {
-    connection: SplitStream<EventStream>,
-}
-
-#[derive(Debug)]
-pub enum ProtocolError {
-    ResponseMsgError(ResponseMsgError),
-    RequestMsgError(RequestMsgError),
-}
-
-impl fmt::Display for ProtocolError {
-    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-        match self {
-            ProtocolError::ResponseMsgError(error) => write!(f, "{}", error),
-            ProtocolError::RequestMsgError(error) => write!(f, "{}", error),
-        }
-    }
-}
+pub struct SubStream(mpsc::Receiver<io::Result<Result<Response, String>>>);
 
 impl Stream for SubStream {
-    type Item = Result<Response, String>;
-    type Error = ProtocolError;
+    type Item = io::Result<Result<Response, String>>;
 
-    fn poll(&mut self) -> Poll<Option<Self::Item>, Self::Error> {
-        self.connection.poll()
+    fn poll_next(self: Pin<&mut Self>, cx: &mut Context) -> Poll<Option<Self::Item>> {
+        unsafe { self.map_unchecked_mut(|x| &mut x.0).poll_next(cx) }
+    }
+}
+
+impl FusedStream for SubStream {
+    fn is_terminated(&self) -> bool {
+        self.0.is_terminated()
     }
 }
