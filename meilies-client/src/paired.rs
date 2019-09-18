@@ -1,28 +1,22 @@
 use std::net::SocketAddr;
-use std::{fmt, io};
+use std::fmt;
 
-use futures::{Future, Stream, Sink};
-use tokio_retry::Retry;
-use log::warn;
+use async_std::io;
+use async_std::net::TcpStream;
+
+use meilies::reqresp::ClientCodec;
 use meilies::stream::{StreamName, EventNumber, EventData, EventName};
 use meilies::reqresp::{Request, RequestMsgError};
 use meilies::reqresp::{Response, ResponseMsgError};
 
-use crate::steel_connection::retry_strategy;
-use super::{connect, SteelConnection};
-
-/// Open a framed paired connection with a server.
-pub fn paired_connect(
-    addr: SocketAddr
-) -> impl Future<Item=PairedConnection, Error=tokio_retry::Error<io::Error>>
-{
-    PairedConnection::connect(addr)
-}
+use futures::sink::SinkExt;
+use futures::stream::StreamExt;
+use futures_codec::Framed;
 
 /// A paired connection returns a response to each message send, it is sequential.
 /// This connection is used to publish events to streams.
 pub struct PairedConnection {
-    connection: SteelConnection,
+    conn: Framed<TcpStream, ClientCodec>,
 }
 
 #[derive(Debug)]
@@ -52,88 +46,90 @@ impl fmt::Display for PairedConnectionError {
 
 impl PairedConnection {
     /// Open a framed paired connection with a server.
-    pub fn connect(addr: SocketAddr) -> impl Future<Item=PairedConnection, Error=tokio_retry::Error<io::Error>> {
-        Retry::spawn(retry_strategy(), move || {
-            warn!("Connecting to {}", addr);
-            connect(&addr)
-                .map(move |connection| {
-                    let connection = SteelConnection::new(addr, connection);
-                    PairedConnection { connection }
-                })
-        })
+    pub async fn connect(addr: &SocketAddr) -> io::Result<PairedConnection> {
+        let stream = TcpStream::connect(addr).await?;
+        let framed = Framed::new(stream, ClientCodec);
+        let paired = PairedConnection { conn: framed };
+
+        Ok(paired)
     }
 
     /// Publish an event to a stream, specifying the event name and data.
-    pub fn publish(
-        self,
+    pub async fn publish(
+        mut self,
         stream: StreamName,
         event_name: EventName,
         event_data: EventData,
-    ) -> impl Future<Item=PairedConnection, Error=PairedConnectionError>
+    ) -> Result<PairedConnection, PairedConnectionError>
     {
         use PairedConnectionError::*;
 
         let command = Request::Publish { stream, event_name, event_data };
+        self.conn.send(command).await.unwrap();
 
-        self.connection
-            .send(command)
-            .map_err(RequestMsgError)
-            .and_then(|framed| framed.into_future().map_err(|(e, _)| ResponseMsgError(e)))
-            .and_then(|(first, connection)| {
-                match first.ok_or(ConnectionClosed)? {
-                    Ok(Response::Ok) => Ok(PairedConnection { connection }),
-                    Ok(response) => Err(InvalidServerResponse(response)),
-                    Err(error) => Err(ServerSide(error)),
-                }
-            })
+        let response = match self.conn.next().await {
+            Some(Ok(response)) => response,
+            Some(Err(error)) => return Err(ResponseMsgError(error)),
+            None => return Err(PairedConnectionError::ConnectionClosed),
+        };
+
+        match response {
+            Ok(Response::Ok) => Ok(self),
+            Ok(response) => Err(InvalidServerResponse(response)),
+            Err(error) => Err(ServerSide(error)),
+        }
     }
 
     /// Request the last event number that the stream is at.
     ///
     /// Returns `None` if the stream does not contain any event.
-    pub fn last_event_number(
-        self,
-        stream: StreamName
-    ) -> impl Future<Item=(StreamName, Option<EventNumber>, PairedConnection), Error=PairedConnectionError>
+    pub async fn last_event_number(
+        mut self,
+        stream: StreamName,
+    ) -> Result<(StreamName, Option<EventNumber>, PairedConnection), PairedConnectionError>
     {
         use PairedConnectionError::*;
 
         let command = Request::LastEventNumber { stream };
+        self.conn.send(command).await.unwrap();
 
-        self.connection
-            .send(command)
-            .map_err(RequestMsgError)
-            .and_then(|framed| framed.into_future().map_err(|(e, _)| ResponseMsgError(e)))
-            .and_then(|(first, connection)| {
-                match first.ok_or(ConnectionClosed)? {
-                    Ok(Response::LastEventNumber { stream, number }) => Ok((stream, number, PairedConnection { connection })),
-                    Ok(response) => Err(InvalidServerResponse(response)),
-                    Err(error) => Err(ServerSide(error)),
-                }
-            })
+        let response = match self.conn.next().await {
+            Some(Ok(response)) => response,
+            Some(Err(error)) => return Err(ResponseMsgError(error)),
+            None => return Err(PairedConnectionError::ConnectionClosed),
+        };
+
+        match response {
+            Ok(Response::LastEventNumber { stream, number }) => {
+                Ok((stream, number, self))
+            },
+            Ok(response) => Err(InvalidServerResponse(response)),
+            Err(error) => Err(ServerSide(error)),
+        }
     }
 
     /// Request the list of stream names
     ///
     /// Returns an empty Vec if the database does not contain any stream.
-    pub fn stream_names(
-        self,
-    ) -> impl Future<Item=(Vec<StreamName>, PairedConnection), Error=PairedConnectionError>
+    pub async fn stream_names(
+        mut self
+    ) -> Result<(Vec<StreamName>, PairedConnection), PairedConnectionError>
     {
         use PairedConnectionError::*;
 
         let command = Request::StreamNames;
+        self.conn.send(command).await.unwrap();
 
-        self.connection
-            .send(command)
-            .map_err(RequestMsgError)
-            .and_then(|framed| framed.into_future().map_err(|(e, _)| ResponseMsgError(e)))
-            .and_then(|(first, connection)| {
-                match first.ok_or(ConnectionClosed)? {
-                    Ok(Response::StreamNames { streams }) => Ok((streams, PairedConnection { connection })),
-                    Ok(response) => Err(InvalidServerResponse(response)),
-                    Err(error) => Err(ServerSide(error)),
-                }
-            })
+        let response = match self.conn.next().await {
+            Some(Ok(response)) => response,
+            Some(Err(error)) => return Err(ResponseMsgError(error)),
+            None => return Err(PairedConnectionError::ConnectionClosed),
+        };
+
+        match response {
+            Ok(Response::StreamNames { streams }) => Ok((streams, self)),
+            Ok(response) => Err(InvalidServerResponse(response)),
+            Err(error) => Err(ServerSide(error)),
+        }
     }
 }

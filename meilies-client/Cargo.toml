@@ -9,8 +9,13 @@ authors = ["Kerollmops <renault.cle@gmail.com>"]
 edition = "2018"
 
 [dependencies]
-futures = "0.1.26"
+async-std = "0.99.5"
+bytes = "0.4.12"
+futures-preview = "0.3.0-alpha.18"
+futures-timer = "0.4.0"
 log = "0.4.6"
 meilies = { version = "0.2.0", path = "../meilies" }
-tokio = "0.1.19"
-tokio-retry = "0.2.0"
+
+[dependencies.futures_codec]
+git = "https://github.com/matthunz/futures-codec.git"
+rev = "5f492b7"
