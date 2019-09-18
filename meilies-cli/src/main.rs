@@ -1,14 +1,15 @@
 use std::net::ToSocketAddrs;
 
-use futures::stream::Stream;
+use futures::executor::ThreadPool;
+use futures::stream::StreamExt;
+
+use meilies::reqresp::Request;
+use meilies::resp::{RespValue, FromResp};
+use meilies::stream::Stream as EsStream;
+use meilies_client::{sub_connect, PairedConnection};
+
 use log::error;
 use structopt::StructOpt;
-use tokio::prelude::*;
-
-use meilies_client::{sub_connect, paired_connect};
-use meilies::resp::{RespValue, FromResp};
-use meilies::reqresp::Request;
-use meilies::stream::Stream as EsStream;
 
 #[derive(Debug, StructOpt)]
 #[structopt(name = "meilies-cli", about = "A basic cli for MeiliES.")]
@@ -43,93 +44,64 @@ fn main() {
         Err(e) => return error!("{}", e),
     };
 
-    let fut = match command {
-        Request::SubscribeAll { range } => {
-            let fut = sub_connect(addr)
-                .map_err(|e| error!("{}", e))
-                .and_then(move |(mut ctrl, msgs)| {
+    let mut pool = ThreadPool::new().unwrap();
+    let cloned_pool = pool.clone();
 
-                    ctrl.subscribe_to(EsStream::all(range));
+    pool.run(async move {
+        let pool = cloned_pool;
 
-                    msgs.for_each(move |msg| {
-                        match msg {
-                            Ok(response) => println!("{:?}", response),
-                            Err(error) => eprintln!("Error: {}", error),
-                        }
-                        future::ok(())
-                    })
-                    .map_err(|e| error!("{:?}", e))
-                })
-                .and_then(|_| {
-                    println!("Connection closed by the server");
-                    Err(())
-                });
+        match command {
+            Request::SubscribeAll { range } => {
+                let (mut ctrl, mut stream) = sub_connect(&pool, addr).await.unwrap();
 
-            Box::new(fut) as Box<dyn Future<Item=(), Error=()> + Send>
-        }
-        Request::Subscribe { streams } => {
-            let fut = sub_connect(addr)
-                .map_err(|e| error!("{}", e))
-                .and_then(|(mut ctrl, msgs)| {
+                ctrl.subscribe_to(EsStream::all(range));
 
-                    for stream in streams {
-                        ctrl.subscribe_to(stream);
+                while let Some(msg) = stream.next().await {
+                    match msg {
+                        Ok(response) => println!("{:?}", response),
+                        Err(error) => eprintln!("Error: {}", error),
                     }
+                }
 
-                    msgs.for_each(move |msg| {
-                        match msg {
-                            Ok(response) => println!("{:?}", response),
-                            Err(error) => eprintln!("Error: {}", error),
-                        }
-                        future::ok(())
-                    })
-                    .map_err(|e| error!("{:?}", e))
-                })
-                .and_then(|_| {
-                    println!("Connection closed by the server");
-                    Err(())
-                });
+                println!("Connection closed by the server");
+            },
+            Request::Subscribe { streams } => {
+                let (mut ctrl, mut stream) = sub_connect(&pool, addr).await.unwrap();
 
-            Box::new(fut) as Box<dyn Future<Item=(), Error=()> + Send>
-        },
-        Request::Publish { stream, event_name, event_data } => {
-            let fut = paired_connect(addr)
-                .map_err(|e| error!("{}", e))
-                .and_then(|conn| {
-                    conn.publish(stream, event_name, event_data)
-                        .map_err(|e| error!("{}", e))
-                })
-                .map(|_conn| println!("Event sent to the stream"));
+                for stream in streams {
+                    ctrl.subscribe_to(stream);
+                }
 
-            Box::new(fut) as Box<dyn Future<Item=(), Error=()> + Send>
-        },
-        Request::LastEventNumber { stream } => {
-            let fut = paired_connect(addr)
-                .map_err(|e| error!("{}", e))
-                .and_then(|conn| {
-                    conn.last_event_number(stream)
-                        .map_err(|e| error!("{}", e))
-                })
-                .map(|(stream, number, _conn)| {
-                    println!("{} - {:?}", stream, number)
-                });
+                while let Some(msg) = stream.next().await {
+                    match msg {
+                        Ok(response) => println!("{:?}", response),
+                        Err(error) => eprintln!("Error: {}", error),
+                    }
+                }
 
-            Box::new(fut) as Box<dyn Future<Item=(), Error=()> + Send>
-        },
-        Request::StreamNames => {
-            let fut = paired_connect(addr)
-                .map_err(|e| error!("{}", e))
-                .and_then(|conn| {
-                    conn.stream_names()
-                        .map_err(|e| error!("{}", e))
-                })
-                .map(|(streams, _conn)| {
-                    println!("{:?}", streams)
-                });
+                println!("Connection closed by the server");
 
-            Box::new(fut) as Box<dyn Future<Item=(), Error=()> + Send>
+            },
+            Request::Publish { stream, event_name, event_data } => {
+                let conn = PairedConnection::connect(&addr).await.unwrap();
+                if let Err(e) = conn.publish(stream, event_name, event_data).await {
+                    error!("{}", e);
+                }
+            },
+            Request::LastEventNumber { stream } => {
+                let conn = PairedConnection::connect(&addr).await.unwrap();
+                match conn.last_event_number(stream).await {
+                    Ok((stream, number, _conn)) => println!("{} - {:?}", stream, number),
+                    Err(e) => error!("{}", e),
+                }
+            },
+            Request::StreamNames => {
+                let conn = PairedConnection::connect(&addr).await.unwrap();
+                match conn.stream_names().await {
+                    Ok((streams, _conn)) => println!("{:?}", streams),
+                    Err(e) => error!("{}", e),
+                }
+            }
         }
-    };
-
-    tokio::run(fut);
+    });
 }
