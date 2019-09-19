@@ -1,5 +1,5 @@
 use std::collections::HashMap;
-use std::{fmt, mem};
+use std::fmt;
 use std::net::SocketAddr;
 use std::pin::Pin;
 use std::time::{Instant, Duration};
@@ -27,11 +27,16 @@ fn into_io_error(error: impl fmt::Display) -> std::io::Error {
     io::Error::new(io::ErrorKind::Other, error.to_string())
 }
 
+struct SubsState {
+    range: (Option<u64>, Option<u64>),
+    resubscribed: bool,
+}
+
 async fn inner_connect(
     stream: TcpStream,
     creceiver: &mut mpsc::Receiver<Request>,
     ssender: &mut mpsc::Sender<io::Result<Result<Response, String>>>,
-    subscriptions: &mut HashMap<StreamName, (Option<u64>, Option<u64>)>,
+    subscriptions: &mut HashMap<StreamName, SubsState>,
 ) -> async_std::io::Result<()>
 {
     let framed = Framed::new(stream, ClientCodec);
@@ -39,8 +44,10 @@ async fn inner_connect(
 
     // initiate subscriptions
     let mut streams = Vec::with_capacity(subscriptions.len());
-    for (name, (from, to)) in subscriptions.iter() {
-        let stream = EsStream::new_from_to(name.clone(), *from, *to);
+    for (name, state) in subscriptions.iter_mut() {
+        state.resubscribed = true;
+        let (from, to) = state.range;
+        let stream = EsStream::new_from_to(name.clone(), from, to);
         streams.push(stream);
     }
     ssink.send(Request::Subscribe { streams }).await.map_err(into_io_error)?;
@@ -68,7 +75,8 @@ async fn inner_connect(
                 if let Request::Subscribe { ref streams } = message {
                     for EsStream { name, range } in streams {
                         let range = (range.from(), range.to());
-                        subscriptions.insert(name.clone(), range);
+                        let state = SubsState { range, resubscribed: false };
+                        subscriptions.insert(name.clone(), state);
                     }
                 }
 
@@ -79,12 +87,25 @@ async fn inner_connect(
             Either::Right(message) => {
                 let message = message.map_err(into_io_error)?;
 
-                // If we receive a new event we should store it event number this way,
+                if let Ok(Response::Subscribed { ref stream }) = message {
+                    // do not show re-subscriptions to the user
+                    if let Some(SubsState { resubscribed: true, .. }) = subscriptions.get(stream) {
+                        continue;
+                    }
+                }
+
+                // If we receive a new event we should store its event number, this way,
                 // in case of re-subscription, we must subscribe from the next event number
                 if let Ok(Response::Event { ref stream, ref number, .. }) = message {
-                    let (_, to) = subscriptions.remove(&stream).unwrap_or_default();
-                    let range = (Some(number.0 + 1), to);
-                    subscriptions.insert(stream.clone(), range);
+                    match subscriptions.remove_entry(&stream) {
+                        Some((stream, state)) => {
+                            let (_, to) = state.range;
+                            let range = (Some(number.0 + 1), to);
+                            let state = SubsState { range, ..state };
+                            subscriptions.insert(stream, state);
+                        },
+                        None => warn!("received event from not subscribed stream {}", stream),
+                    }
                 }
 
                 if let Err(error) = ssender.send(Ok(message)).await {
@@ -108,7 +129,7 @@ pub async fn sub_connect(
 {
     // 'c' stands for client and 's' stands for server
     let (csender, creceiver) = mpsc::channel(100); // SubController -> this reactor
-    let (ssender, sreceiver) = mpsc::channel(100); // this reactor -> SubStream
+    let (ssender, sreceiver) = mpsc::channel(0); // this reactor -> SubStream
 
     pool.spawn_ok(async move {
         let mut creceiver = creceiver;
@@ -133,10 +154,13 @@ pub async fn sub_connect(
                 }
             }
 
-            if let Some(mul) = backoff.next() {
-                let dur = Duration::from_millis(100) * mul;
-                let _ = futures_timer::Delay::new(dur).await;
-                warn!("Retrying connection with {}", addr);
+            match backoff.next() {
+                Some(mul) => {
+                    let dur = Duration::from_millis(100) * mul;
+                    let _ = futures_timer::Delay::new(dur).await;
+                    warn!("Retrying connection with {}", addr);
+                },
+                None => break,
             }
         }
 
