@@ -23,7 +23,7 @@ impl<T: AsRef<[u8]>> RawEvent<T> {
     }
 
     // FIXME: Prefer using a typed Error
-    pub fn name(&self) -> Result<EventName, Box<Error>> {
+    pub fn name(&self) -> Result<EventName, Box<dyn Error>> {
         let name_size = self.name_size();
         let raw_name = &self.0.as_ref()[8..(8 + name_size)];
         let name = String::from_utf8(raw_name.to_owned())?;

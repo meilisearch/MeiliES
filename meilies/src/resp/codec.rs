@@ -1,9 +1,8 @@
-use std::{fmt, num, str};
+use std::{fmt, num, str, io};
 
 use bytes::{BufMut, BytesMut};
 use subslice::SubsliceExt;
-use tokio::codec::{Encoder, Decoder};
-use tokio::io;
+use futures_codec::{Encoder, Decoder};
 
 use super::RespValue;
 

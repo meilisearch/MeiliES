@@ -1,24 +1,26 @@
 use std::convert::TryFrom;
 use std::fmt;
-use std::io::{Error as IoError, ErrorKind};
+use std::io::Error as IoError;
 use std::net::SocketAddr;
 use std::path::PathBuf;
 use std::sync::Arc;
 use std::thread;
 use std::time::Instant;
 
+use async_std::net::TcpListener;
+use futures::executor::ThreadPool;
+use futures::channel::mpsc;
+use futures::stream::StreamExt;
+use futures::sink::SinkExt;
+use futures_codec::Framed;
 use log::{info, error};
 use sled::{Db, Tree, IVec, Event, ConfigBuilder};
 use structopt::StructOpt;
-use tokio::codec::Decoder;
-use tokio::net::TcpListener;
-use tokio::prelude::*;
-use tokio::sync::mpsc;
 
 use meilies::reqresp::{ServerCodec, Request, Response};
-use meilies::reqresp::{RequestMsgError, ResponseMsgError};
+use meilies::reqresp::RequestMsgError;
 use meilies::stream::{RawEvent, EventNumber, Stream as EsStream, StreamName as EsStreamName, ReadRange};
-use meilies::resp::{RespMsgError, RespVecConvertError, RespBytesConvertError};
+use meilies::resp::{RespVecConvertError, RespBytesConvertError};
 
 fn new_event_number(numbers: &Tree, name: &EsStreamName) -> sled::Result<EventNumber> {
     let new_value = numbers.update_and_fetch(name, |previous| {
@@ -96,7 +98,7 @@ impl From<IoError> for Error {
     }
 }
 
-fn send_stream_events(
+async fn send_stream_events(
     stream: EsStream,
     tree: Arc<Tree>,
     mut sender: mpsc::Sender<Result<Response, String>>,
@@ -121,12 +123,9 @@ fn send_stream_events(
                     event_data: raw_event.data(),
                 };
 
-                match sender.send(Ok(event)).wait() {
-                    Ok(s) => sender = s,
-                    Err(_) => {
-                        info!("encountered closed channel");
-                        return Ok(());
-                    }
+                if sender.send(Ok(event)).await.is_err() {
+                    info!("encountered closed channel");
+                    return Ok(());
                 }
 
                 next_number = number.next();
@@ -145,12 +144,9 @@ fn send_stream_events(
                             event_data: raw_event.data(),
                         };
 
-                        match sender.send(Ok(event)).wait() {
-                            Ok(s) => sender = s,
-                            Err(_) => {
-                                info!("encountered closed channel");
-                                return Ok(());
-                            }
+                        if sender.send(Ok(event)).await.is_err() {
+                            info!("encountered closed channel");
+                            return Ok(());
                         }
                     }
                 }
@@ -173,12 +169,9 @@ fn send_stream_events(
                     event_data: raw_event.data(),
                 };
 
-                match sender.send(Ok(event)).wait() {
-                    Ok(s) => sender = s,
-                    Err(_) => {
-                        info!("encountered closed channel");
-                        return Ok(());
-                    }
+                if sender.send(Ok(event)).await.is_err() {
+                    info!("encountered closed channel");
+                    return Ok(());
                 }
 
                 next_number = number.next();
@@ -203,12 +196,9 @@ fn send_stream_events(
                             event_data: raw_event.data(),
                         };
 
-                        match sender.send(Ok(event)).wait() {
-                            Ok(s) => sender = s,
-                            Err(_) => {
-                                info!("encountered closed channel");
-                                return Ok(());
-                            }
+                        if sender.send(Ok(event)).await.is_err() {
+                            info!("encountered closed channel");
+                            return Ok(());
                         }
                     }
                 }
@@ -227,12 +217,9 @@ fn send_stream_events(
                         event_data: raw_event.data(),
                     };
 
-                    match sender.send(Ok(event)).wait() {
-                        Ok(s) => sender = s,
-                        Err(_) => {
-                            info!("encountered closed channel");
-                            return Ok(());
-                        }
+                    if sender.send(Ok(event)).await.is_err() {
+                        info!("encountered closed channel");
+                        return Ok(());
                     }
                 }
             }
@@ -242,10 +229,10 @@ fn send_stream_events(
     Ok(())
 }
 
-fn handle_request(
+async fn handle_request(
     request: Request,
     db: Db,
-    sender: mpsc::Sender<Result<Response, String>>,
+    mut sender: mpsc::Sender<Result<Response, String>>,
 ) -> Result<(), Error>
 {
     match request {
@@ -260,23 +247,22 @@ fn handle_request(
                 let tree = db.open_tree(stream.name.clone().into_bytes())?;
 
                 thread::Builder::new().spawn(|| {
-                    let mut sender = sender;
+                    ThreadPool::new().unwrap().run(async {
+                        let mut sender = sender;
 
-                    let subscribed = Response::Subscribed { stream: stream.name.clone() };
-                    match sender.send(Ok(subscribed)).wait() {
-                        Ok(s) => sender = s,
-                        Err(_) => {
-                            info!("encountered closed channel");
-                            return;
-                        },
-                    }
-
-                    if let Err(e) = send_stream_events(stream, tree, sender.clone()) {
-                        if let Err(_) = sender.send(Err(e.to_string())).wait() {
+                        let subscribed = Response::Subscribed { stream: stream.name.clone() };
+                        if sender.send(Ok(subscribed)).await.is_err() {
                             info!("encountered closed channel");
                             return;
                         }
-                    }
+
+                        if let Err(e) = send_stream_events(stream, tree, sender.clone()).await {
+                            if sender.send(Err(e.to_string())).await.is_err() {
+                                info!("encountered closed channel");
+                                return;
+                            }
+                        }
+                    });
                 })?;
             }
         }
@@ -286,23 +272,22 @@ fn handle_request(
                 let tree = db.open_tree(stream.name.clone().into_bytes())?;
 
                 thread::Builder::new().spawn(|| {
-                    let mut sender = sender;
+                    ThreadPool::new().unwrap().run(async {
+                        let mut sender = sender;
 
-                    let subscribed = Response::Subscribed { stream: stream.name.clone() };
-                    match sender.send(Ok(subscribed)).wait() {
-                        Ok(s) => sender = s,
-                        Err(_) => {
-                            info!("encountered closed channel");
-                            return;
-                        },
-                    }
-
-                    if let Err(e) = send_stream_events(stream, tree, sender.clone()) {
-                        if let Err(_) = sender.send(Err(e.to_string())).wait() {
+                        let subscribed = Response::Subscribed { stream: stream.name.clone() };
+                        if sender.send(Ok(subscribed)).await.is_err() {
                             info!("encountered closed channel");
                             return;
                         }
-                    }
+
+                        if let Err(e) = send_stream_events(stream, tree, sender.clone()).await {
+                            if sender.send(Err(e.to_string())).await.is_err() {
+                                info!("encountered closed channel");
+                                return;
+                            }
+                        }
+                    });
                 })?;
             }
         },
@@ -325,7 +310,7 @@ fn handle_request(
 
             info!("{:?} {:?} {:?}", stream, event_name, event_number);
 
-            if sender.send(Ok(Response::Ok)).wait().is_err() {
+            if sender.send(Ok(Response::Ok)).await.is_err() {
                 info!("encountered closed channel");
             }
         },
@@ -334,7 +319,7 @@ fn handle_request(
             let number = key.map(|k| EventNumber::try_from(k.as_ref()).unwrap());
 
             let last_event_number = Response::LastEventNumber { stream, number };
-            if sender.send(Ok(last_event_number)).wait().is_err() {
+            if sender.send(Ok(last_event_number)).await.is_err() {
                 info!("encountered closed channel");
             }
         },
@@ -344,7 +329,7 @@ fn handle_request(
             let stream_names = stream_strings.map(|s| EsStreamName::new(s).unwrap()).collect();
             let streams = Response::StreamNames { streams: stream_names };
 
-            if sender.send(Ok(streams)).wait().is_err() {
+            if sender.send(Ok(streams)).await.is_err() {
                 info!("encountered closed channel");
             }
         }
@@ -424,63 +409,61 @@ fn main() {
     };
     info!("kv-store loaded in {:.2?}", now.elapsed());
 
-    let listener = match TcpListener::bind(&addr) {
-        Ok(listener) => listener,
-        Err(e) => return error!("error binding address; {}", e),
-    };
-    println!("server is listening on {}", addr);
+    let mut pool = ThreadPool::new().unwrap();
+    let cloned_pool = pool.clone();
 
-    let server = listener
-        .incoming()
-        .map_err(|e| error!("error accepting socket; {}", e))
-        .for_each(move |socket| {
-            let framed = ServerCodec::default().framed(socket);
-            let (writer, reader) = framed.split();
-            let (sender, receiver) = mpsc::channel(10);
+    pool.run(async move {
+        let listener = match TcpListener::bind(&addr).await {
+            Ok(listener) => listener,
+            Err(e) => return error!("error binding address; {}", e),
+        };
+        println!("server is listening on {}", addr);
 
-            let error_sender = sender.clone();
+        listener
+            .incoming()
+            .for_each_concurrent(None, |result| async {
+                let socket = match result {
+                    Ok(socket) => socket,
+                    Err(e) => return error!("error; {}", e),
+                };
 
-            let db = db.clone();
-            let requests = reader
-                .map_err(Error::RequestMsgError)
-                .for_each(move |request| {
-                    let db = db.clone();
-                    let sender = sender.clone();
-                    future::result(handle_request(request, db, sender))
-                })
-                .or_else(move |error| {
-                    error!("error; {}", error);
-                    if error_sender.send(Err(error.to_string())).wait().is_err() {
-                        info!("encountered closed channel");
+                let framed = Framed::new(socket, ServerCodec);
+                let (mut writer, mut reader) = framed.split();
+                let (mut sender, mut receiver) = mpsc::channel(10);
+
+                let db = db.clone();
+                let mut error_sender = sender.clone();
+
+                cloned_pool.spawn_ok(async move {
+                    while let Some(result) = reader.next().await {
+                        let result = match result {
+                            Ok(request) => handle_request(request, db.clone(), sender.clone()).await,
+                            Err(e) => Err(Error::RequestMsgError(e)),
+                        };
+
+                        if let Err(e) = result {
+                            error!("error; {}", e);
+                            if error_sender.send(Err(e.to_string())).await.is_err() {
+                                info!("encountered closed channel");
+                            }
+                        }
                     }
-
-                    future::ok(())
                 });
 
-            let responses = receiver
-                .map_err(|e| {
-                    let error = RespMsgError::IoError(IoError::new(ErrorKind::BrokenPipe, e));
-                    ResponseMsgError::RespMsgError(error)
-                })
-                .forward(writer)
-                .map_err(|error| {
-                    use ResponseMsgError::RespMsgError;
-                    use crate::RespMsgError::IoError;
-
-                    match error {
-                        RespMsgError(IoError(ref e)) if e.kind() == ErrorKind::BrokenPipe => {
-                            info!("{}", e);
-                        },
-                        other => error!("{}", other),
+                cloned_pool.spawn_ok(async move {
+                    while let Some(result) = receiver.next().await {
+                        match result {
+                            Ok(msg) => {
+                                if let Err(e) = writer.send(Ok(msg)).await {
+                                    error!("error; {}", e)
+                                }
+                            },
+                            Err(e) => info!("{}", e),
+                        }
                     }
-                })
-                .map(drop);
+                });
+            })
+            .await
 
-            tokio::spawn(requests);
-            tokio::spawn(responses);
-
-            future::ok(())
-        });
-
-    tokio::run(server)
+    });
 }

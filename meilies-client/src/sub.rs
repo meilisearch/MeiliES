@@ -18,7 +18,7 @@ use futures::task::{Poll, Context};
 use futures_codec::Framed;
 use futures_timer::Interval;
 
-use log::{error, warn};
+use log::{info, error, warn};
 
 use meilies::reqresp::{ClientCodec, Request, Response};
 use meilies::stream::{StreamName, Stream as EsStream};
@@ -141,6 +141,7 @@ pub async fn sub_connect(
             let result = match TcpStream::connect(addr).await {
                 Ok(stream) => {
                     backoff = crate::backoff::new();
+                    info!("Connected to {}", addr);
                     inner_connect(stream, &mut creceiver, &mut ssender, &mut subs).await
                 },
                 Err(e) => Err(e),

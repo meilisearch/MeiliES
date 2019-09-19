@@ -5,12 +5,16 @@ authors = ["Kerollmops <renault.cle@gmail.com>"]
 edition = "2018"
 
 [dependencies]
+async-std = "0.99.5"
 env_logger = "0.6.1"
-futures = "0.1.26"
+futures-preview = "0.3.0-alpha.18"
 log = "0.4.6"
 meilies = { version = "0.2.0", path = "../meilies" }
 sentry = { version = "0.15.4", optional = true }
 sled = { version = "0.23.0", features = ["compression"] }
 structopt = { version = "0.2.15", default-features = false }
-tokio = "0.1.19"
 vigil = { version = "1.1.1", package = "vigil-reporter", optional = true }
+
+[dependencies.futures_codec]
+git = "https://github.com/matthunz/futures-codec.git"
+rev = "5f492b7"
