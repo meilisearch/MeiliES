@@ -1,11 +1,11 @@
 use std::fmt;
 
 use bytes::BytesMut;
-use tokio::codec::{Encoder, Decoder};
+use tokio::codec::{Decoder, Encoder};
 use tokio::io;
 
-use crate::resp::{RespValue, FromResp, RespCodec, RespMsgError};
-use super::{Request, Response, RespRequestConvertError, RespResponseConvertError};
+use super::{Request, RespRequestConvertError, RespResponseConvertError, Response};
+use crate::resp::{FromResp, RespCodec, RespMsgError, RespValue};
 
 #[derive(Debug, Default)]
 pub struct ClientCodec;

@@ -1,6 +1,6 @@
 use std::error::Error;
 
-use super::{EventName, EventData};
+use super::{EventData, EventName};
 
 #[derive(Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub struct RawEvent<T>(T);
@@ -15,7 +15,7 @@ impl<T: AsRef<[u8]>> RawEvent<T> {
         let mut event_name_size: [u8; 8] = [0; 8];
         for (i, b) in self.0.as_ref().iter().enumerate() {
             if i == 8 {
-                break
+                break;
             }
             event_name_size[i] = *b;
         }

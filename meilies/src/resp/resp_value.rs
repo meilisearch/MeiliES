@@ -1,4 +1,4 @@
-use std::{str, fmt};
+use std::{fmt, str};
 
 #[derive(Clone, PartialEq, Eq)]
 pub enum RespValue {
@@ -52,13 +52,9 @@ impl fmt::Debug for RespValue {
         match self {
             RespValue::SimpleString(string) => {
                 fmt.debug_tuple("SimpleString").field(&string).finish()
-            },
-            RespValue::Error(string) => {
-                fmt.debug_tuple("Error").field(&string).finish()
-            },
-            RespValue::Integer(integer) => {
-                fmt.debug_tuple("Integer").field(&integer).finish()
-            },
+            }
+            RespValue::Error(string) => fmt.debug_tuple("Error").field(&string).finish(),
+            RespValue::Integer(integer) => fmt.debug_tuple("Integer").field(&integer).finish(),
             RespValue::BulkString(value) => {
                 let mut dbg = fmt.debug_tuple("BulkString");
 
@@ -68,13 +64,9 @@ impl fmt::Debug for RespValue {
                 };
 
                 dbg.finish()
-            },
-            RespValue::Array(elements) => {
-                fmt.debug_tuple("Array").field(&elements).finish()
-            },
-            RespValue::Nil => {
-                fmt.debug_tuple("Nil").finish()
-            },
+            }
+            RespValue::Array(elements) => fmt.debug_tuple("Array").field(&elements).finish(),
+            RespValue::Nil => fmt.debug_tuple("Nil").finish(),
         }
     }
 }
