@@ -1,6 +1,6 @@
-use std::convert::TryFrom;
+use crate::resp::{FromResp, RespIntConvertError, RespValue};
 use core::array::TryFromSliceError;
-use crate::resp::{RespValue, FromResp, RespIntConvertError};
+use std::convert::TryFrom;
 
 #[derive(Debug, Copy, Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub struct EventNumber(pub u64);

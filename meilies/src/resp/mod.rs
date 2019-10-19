@@ -4,10 +4,7 @@ mod resp_value;
 
 pub use self::codec::{RespCodec, RespMsgError};
 pub use self::from_resp::{
-    FromResp,
-    RespStringConvertError,
-    RespIntConvertError,
-    RespBytesConvertError,
+    FromResp, RespBytesConvertError, RespIntConvertError, RespStringConvertError,
     RespVecConvertError,
 };
 pub use self::resp_value::RespValue;

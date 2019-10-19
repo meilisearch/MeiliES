@@ -1,8 +1,8 @@
-use std::string::FromUtf8Error;
-use std::str::FromStr;
 use std::fmt;
+use std::str::FromStr;
+use std::string::FromUtf8Error;
 
-use crate::resp::{RespValue, FromResp, RespStringConvertError};
+use crate::resp::{FromResp, RespStringConvertError, RespValue};
 
 #[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub struct EventName(String);
@@ -10,7 +10,7 @@ pub struct EventName(String);
 impl EventName {
     pub fn new(name: String) -> Result<EventName, EventNameError> {
         if name.is_empty() {
-            return Err(EventNameError::EmptyName)
+            return Err(EventNameError::EmptyName);
         }
 
         Ok(EventName(name))
@@ -86,4 +86,4 @@ impl fmt::Display for EventNameError {
     }
 }
 
-impl std::error::Error for EventNameError { }
+impl std::error::Error for EventNameError {}

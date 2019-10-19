@@ -1,8 +1,8 @@
-use std::string::FromUtf8Error;
-use std::str::FromStr;
 use std::fmt;
+use std::str::FromStr;
+use std::string::FromUtf8Error;
 
-use crate::resp::{RespValue, FromResp, RespStringConvertError};
+use crate::resp::{FromResp, RespStringConvertError, RespValue};
 
 pub const ALL_STREAMS: &str = "$all";
 
@@ -16,11 +16,11 @@ impl StreamName {
 
     pub fn new(name: String) -> Result<StreamName, StreamNameError> {
         if name.is_empty() {
-            return Err(StreamNameError::EmptyName)
+            return Err(StreamNameError::EmptyName);
         }
 
         if name.contains(':') {
-            return Err(StreamNameError::ContainColon)
+            return Err(StreamNameError::ContainColon);
         }
 
         Ok(StreamName(name))

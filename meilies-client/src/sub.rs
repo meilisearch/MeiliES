@@ -2,13 +2,13 @@ use std::collections::HashMap;
 use std::net::SocketAddr;
 use std::{fmt, io};
 
-use futures::{Future, Poll, Async, AsyncSink, Stream, Sink};
+use futures::stream::SplitStream;
+use futures::{Async, AsyncSink, Future, Poll, Sink, Stream};
 use log::{error, warn};
-use meilies::resp::RespMsgError;
 use meilies::reqresp::{Request, RequestMsgError, Response, ResponseMsgError};
+use meilies::resp::RespMsgError;
 use meilies::stream::{Stream as EsStream, StreamName};
 use tokio::sync::mpsc;
-use futures::stream::SplitStream;
 use tokio_retry::Retry;
 
 use super::{connect, retry_strategy, SteelConnection};
@@ -29,14 +29,18 @@ pub struct EventStream {
 }
 
 impl EventStream {
-    fn connect(addr: SocketAddr) -> impl Future<Item=EventStream, Error=tokio_retry::Error<io::Error>> {
+    fn connect(
+        addr: SocketAddr,
+    ) -> impl Future<Item = EventStream, Error = tokio_retry::Error<io::Error>> {
         Retry::spawn(retry_strategy(), move || {
             warn!("Connecting to {}", addr);
-            connect(&addr)
-                .map(move |connection| {
-                    let connection = SteelConnection::new(addr, connection);
-                    EventStream { state: HashMap::new(), connection }
-                })
+            connect(&addr).map(move |connection| {
+                let connection = SteelConnection::new(addr, connection);
+                EventStream {
+                    state: HashMap::new(),
+                    connection,
+                }
+            })
         })
     }
 
@@ -48,7 +52,11 @@ impl EventStream {
 
         for (name, context) in &mut self.state {
             context.reconnected = true;
-            let stream = EsStream::new_from_to(name.clone(), context.position_start.into(), context.position_end.into());
+            let stream = EsStream::new_from_to(
+                name.clone(),
+                context.position_start.into(),
+                context.position_end.into(),
+            );
             streams.push(stream);
         }
 
@@ -69,20 +77,21 @@ impl Stream for EventStream {
             Ok(Async::Ready(Some(item))) => {
                 match &item {
                     Ok(Response::Event { stream, number, .. }) => {
-                        self.state.entry(stream.clone()).or_default().position_start = Some(number.0 + 1);
-                    },
+                        self.state.entry(stream.clone()).or_default().position_start =
+                            Some(number.0 + 1);
+                    }
                     Ok(Response::Subscribed { stream }) => {
                         // if we were already subscribed to a stream and we are reconnecting
                         // we do not return the message validating a subscription to the user
                         if self.state.get(&stream).map_or(false, |c| c.reconnected) {
                             return self.poll();
                         }
-                    },
+                    }
                     _otherwise => (),
                 }
 
                 Ok(Async::Ready(Some(item)))
-            },
+            }
             otherwise => otherwise,
         };
 
@@ -98,7 +107,10 @@ impl Sink for EventStream {
     type SinkItem = Request;
     type SinkError = ProtocolError;
 
-    fn start_send(&mut self, item: Self::SinkItem) -> Result<AsyncSink<Self::SinkItem>, Self::SinkError> {
+    fn start_send(
+        &mut self,
+        item: Self::SinkItem,
+    ) -> Result<AsyncSink<Self::SinkItem>, Self::SinkError> {
         if let Request::Subscribe { streams } = &item {
             for EsStream { name, range } in streams {
                 self.state.entry(name.clone()).or_default().position_start = range.from();
@@ -128,9 +140,8 @@ impl Sink for EventStream {
 
 /// Open a sup connection with a server.
 pub fn sub_connect(
-    addr: SocketAddr
-) -> impl Future<Item=(SubController, SubStream), Error=tokio_retry::Error<io::Error>>
-{
+    addr: SocketAddr,
+) -> impl Future<Item = (SubController, SubStream), Error = tokio_retry::Error<io::Error>> {
     EventStream::connect(addr)
         .map_err(|e| dbg!(e))
         .map(|connection| {
@@ -165,7 +176,9 @@ pub struct SubController {
 impl SubController {
     /// Ask the server to send events of the given stream.
     pub fn subscribe_to(&mut self, stream: EsStream) {
-        let command = Request::Subscribe { streams: vec![stream] };
+        let command = Request::Subscribe {
+            streams: vec![stream],
+        };
 
         if let Err(e) = self.sender.try_send(command) {
             error!("{}", e);

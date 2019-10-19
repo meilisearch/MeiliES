@@ -3,28 +3,28 @@ use std::num::ParseIntError;
 use std::str::FromStr;
 use std::string::FromUtf8Error;
 
-use crate::resp::{RespValue, FromResp, RespStringConvertError};
+use crate::resp::{FromResp, RespStringConvertError, RespValue};
 use crate::stream::{StreamName, StreamNameError};
 
 #[derive(Debug, Copy, Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub enum ReadRange {
-   ReadFromUntil(u64, u64),
-   ReadFrom(u64),
-   ReadFromEnd,
+    ReadFromUntil(u64, u64),
+    ReadFrom(u64),
+    ReadFromEnd,
 }
 
 impl ReadRange {
     pub fn from(&self) -> Option<u64> {
         match self {
             ReadRange::ReadFromUntil(from, _) | ReadRange::ReadFrom(from) => Some(*from),
-            _ => None
+            _ => None,
         }
     }
 
     pub fn to(&self) -> Option<u64> {
         match self {
             ReadRange::ReadFromUntil(_, to) => Some(*to),
-            _ => None
+            _ => None,
         }
     }
 }
@@ -124,7 +124,10 @@ impl FromResp for Stream {
 
 impl From<StreamName> for Stream {
     fn from(name: StreamName) -> Stream {
-        Stream { name, range: ReadRange::ReadFromEnd }
+        Stream {
+            name,
+            range: ReadRange::ReadFromEnd,
+        }
     }
 }
 
@@ -139,12 +142,15 @@ impl FromStr for Stream {
             (Some(name), None, None, None) => {
                 let name = StreamName::from_str(name).map_err(StreamNameError)?;
                 Ok(Stream::from(name))
-            },
+            }
             (Some(name), Some(from), None, None) => {
                 let name = StreamName::new(name.to_owned()).map_err(StreamNameError)?;
                 let number = u64::from_str_radix(from, 10).map_err(StartFromError)?;
-                Ok(Stream { name, range: ReadRange::ReadFrom(number)})
-            },
+                Ok(Stream {
+                    name,
+                    range: ReadRange::ReadFrom(number),
+                })
+            }
             (Some(name), Some(from), Some(to), None) => {
                 let name = StreamName::new(name.to_owned()).map_err(StreamNameError)?;
                 let from = u64::from_str_radix(from, 10).map_err(StartFromError)?;
@@ -152,8 +158,11 @@ impl FromStr for Stream {
                 if from >= to {
                     return Err(BoundsError);
                 }
-                Ok(Stream { name, range: ReadRange::ReadFromUntil(from, to) })
-            },
+                Ok(Stream {
+                    name,
+                    range: ReadRange::ReadFromUntil(from, to),
+                })
+            }
             (_, _, _, _) => Err(FormatError),
         }
     }
@@ -189,25 +198,39 @@ mod tests {
     #[test]
     fn create_stream_from_str() {
         let test_stream1 = Stream::from_str("default").unwrap();
-        let test_stream2 = Stream::new(StreamName::new("default".to_owned()).unwrap(), ReadRange::ReadFromEnd);
+        let test_stream2 = Stream::new(
+            StreamName::new("default".to_owned()).unwrap(),
+            ReadRange::ReadFromEnd,
+        );
         assert_eq!(test_stream1, test_stream2);
 
         let test_stream1 = Stream::from_str("default:0").unwrap();
-        let test_stream2 = Stream::new(StreamName::new("default".to_owned()).unwrap(), ReadRange::ReadFrom(0));
+        let test_stream2 = Stream::new(
+            StreamName::new("default".to_owned()).unwrap(),
+            ReadRange::ReadFrom(0),
+        );
         assert_eq!(test_stream1, test_stream2);
 
         let test_stream1 = Stream::from_str("default:5").unwrap();
-        let test_stream2 = Stream::new(StreamName::new("default".to_owned()).unwrap(), ReadRange::ReadFrom(5));
+        let test_stream2 = Stream::new(
+            StreamName::new("default".to_owned()).unwrap(),
+            ReadRange::ReadFrom(5),
+        );
         assert_eq!(test_stream1, test_stream2);
 
         let test_stream1 = Stream::from_str("default:0:5").unwrap();
-        let test_stream2 = Stream::new(StreamName::new("default".to_owned()).unwrap(), ReadRange::ReadFromUntil(0, 5));
+        let test_stream2 = Stream::new(
+            StreamName::new("default".to_owned()).unwrap(),
+            ReadRange::ReadFromUntil(0, 5),
+        );
         assert_eq!(test_stream1, test_stream2);
 
         let test_stream1 = Stream::from_str("default:1:5").unwrap();
-        let test_stream2 = Stream::new(StreamName::new("default".to_owned()).unwrap(), ReadRange::ReadFromUntil(1, 5));
+        let test_stream2 = Stream::new(
+            StreamName::new("default".to_owned()).unwrap(),
+            ReadRange::ReadFromUntil(1, 5),
+        );
         assert_eq!(test_stream1, test_stream2);
-
 
         let result = Stream::from_str("default:");
         assert!(result.is_err());
@@ -233,6 +256,4 @@ mod tests {
         let result = Stream::from_str("default:1:0");
         assert!(result.is_err());
     }
-
-
 }

@@ -1,15 +1,18 @@
 use std::net::ToSocketAddrs;
 
-use meilies::stream::Stream as EsStream;
-use meilies::reqresp::Response;
-use meilies_client::{sub_connect, paired_connect};
-use futures::{Future, Stream, future};
 use futures::future::Either;
+use futures::{future, Future, Stream};
+use log::{error, info};
+use meilies::reqresp::Response;
+use meilies::stream::Stream as EsStream;
+use meilies_client::{paired_connect, sub_connect};
 use structopt::StructOpt;
-use log::{info, error};
 
 #[derive(Debug, StructOpt)]
-#[structopt(name = "meilies-transhumance", about = "A basic migration tool for MeiliES.")]
+#[structopt(
+    name = "meilies-transhumance",
+    about = "A basic migration tool for MeiliES."
+)]
 struct Opt {
     /// Source server address (i.e. localhost:6480).
     #[structopt(long = "src-server")]
@@ -32,20 +35,38 @@ fn main() {
 
     let opt = Opt::from_args();
 
-    let src_server = match opt.src_server.to_socket_addrs().map(|addrs| addrs.filter(|a| a.is_ipv4()).next()) {
+    let src_server = match opt
+        .src_server
+        .to_socket_addrs()
+        .map(|addrs| addrs.filter(|a| a.is_ipv4()).next())
+    {
         Ok(Some(addr)) => addr,
-        Ok(None) => return error!("impossible to dns resolve the source addr; {:?}", opt.src_server),
+        Ok(None) => {
+            return error!(
+                "impossible to dns resolve the source addr; {:?}",
+                opt.src_server
+            )
+        }
         Err(e) => return error!("error parsing addr; {}", e),
     };
 
-    let dst_server = match opt.dst_server.to_socket_addrs().map(|addrs| addrs.filter(|a| a.is_ipv4()).next()) {
+    let dst_server = match opt
+        .dst_server
+        .to_socket_addrs()
+        .map(|addrs| addrs.filter(|a| a.is_ipv4()).next())
+    {
         Ok(Some(addr)) => addr,
-        Ok(None) => return error!("impossible to dns resolve the destination addr; {:?}", opt.dst_server),
+        Ok(None) => {
+            return error!(
+                "impossible to dns resolve the destination addr; {:?}",
+                opt.dst_server
+            )
+        }
         Err(e) => return error!("error parsing addr; {}", e),
     };
 
     if src_server == dst_server {
-        return error!("the source and destination can not be the same")
+        return error!("the source and destination can not be the same");
     }
 
     let fut = sub_connect(src_server)
@@ -58,30 +79,33 @@ fn main() {
             paired_connect(dst_server)
                 .map_err(|e| error!("{}", e))
                 .and_then(|dst_conn| {
-                    msgs
-                        .map_err(|e| error!("{}", e))
-                        .fold(dst_conn, move |dst_conn, msg| {
-                            match msg {
-                                Ok(Response::Event { stream, number, event_name, event_data }) => {
-                                    info!("{:?} {:?} {:?}", stream, event_name, number);
-                                    Either::A(dst_conn.publish(stream, event_name, event_data)
-                                                      .map_err(|e| error!("{}", e)))
-                                },
-                                Ok(response) => {
-                                    info!("{:?}", response);
-                                    Either::B(future::ok(dst_conn))
-                                },
-                                Err(error) => {
-                                    error!("{}", error);
-                                    Either::B(future::ok(dst_conn))
-                                },
+                    msgs.map_err(|e| error!("{}", e))
+                        .fold(dst_conn, move |dst_conn, msg| match msg {
+                            Ok(Response::Event {
+                                stream,
+                                number,
+                                event_name,
+                                event_data,
+                            }) => {
+                                info!("{:?} {:?} {:?}", stream, event_name, number);
+                                Either::A(
+                                    dst_conn
+                                        .publish(stream, event_name, event_data)
+                                        .map_err(|e| error!("{}", e)),
+                                )
+                            }
+                            Ok(response) => {
+                                info!("{:?}", response);
+                                Either::B(future::ok(dst_conn))
+                            }
+                            Err(error) => {
+                                error!("{}", error);
+                                Either::B(future::ok(dst_conn))
                             }
                         })
                 })
         })
-        .and_then(|_| {
-            Err(println!("Connection closed by the server"))
-        });
+        .and_then(|_| Err(println!("Connection closed by the server")));
 
     tokio::run(fut);
 }

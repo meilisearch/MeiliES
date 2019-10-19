@@ -7,18 +7,20 @@ use std::sync::Arc;
 use std::thread;
 use std::time::Instant;
 
-use log::{info, error};
-use sled::{Db, Tree, IVec, Event, ConfigBuilder};
+use log::{error, info};
+use sled::{ConfigBuilder, Db, Event, IVec, Tree};
 use structopt::StructOpt;
 use tokio::codec::Decoder;
 use tokio::net::TcpListener;
 use tokio::prelude::*;
 use tokio::sync::mpsc;
 
-use meilies::reqresp::{ServerCodec, Request, Response};
+use meilies::reqresp::{Request, Response, ServerCodec};
 use meilies::reqresp::{RequestMsgError, ResponseMsgError};
-use meilies::stream::{RawEvent, EventNumber, Stream as EsStream, StreamName as EsStreamName, ReadRange};
-use meilies::resp::{RespMsgError, RespVecConvertError, RespBytesConvertError};
+use meilies::resp::{RespBytesConvertError, RespMsgError, RespVecConvertError};
+use meilies::stream::{
+    EventNumber, RawEvent, ReadRange, Stream as EsStream, StreamName as EsStreamName,
+};
 
 fn new_event_number(numbers: &Tree, name: &EsStreamName) -> sled::Result<EventNumber> {
     let new_value = numbers.update_and_fetch(name, |previous| {
@@ -55,7 +57,11 @@ struct Opt {
     no_sentry: bool,
 
     /// Database path
-    #[structopt(long = "db-path", parse(from_os_str), default_value = "/var/lib/meilies")]
+    #[structopt(
+        long = "db-path",
+        parse(from_os_str),
+        default_value = "/var/lib/meilies"
+    )]
     db_path: PathBuf,
 }
 
@@ -100,8 +106,7 @@ fn send_stream_events(
     stream: EsStream,
     tree: Arc<Tree>,
     mut sender: mpsc::Sender<Result<Response, String>>,
-) -> sled::Result<()>
-{
+) -> sled::Result<()> {
     info!("blocking subscription on {} spawned", stream);
 
     match stream.range {
@@ -155,7 +160,7 @@ fn send_stream_events(
                     }
                 }
             }
-        },
+        }
         ReadRange::ReadFromUntil(from, to) => {
             let mut next_number = EventNumber(from);
             let to_event_number = EventNumber(to);
@@ -213,7 +218,7 @@ fn send_stream_events(
                     }
                 }
             }
-        },
+        }
         ReadRange::ReadFromEnd => {
             let watcher = tree.watch_prefix(vec![]);
 
@@ -236,7 +241,7 @@ fn send_stream_events(
                     }
                 }
             }
-        },
+        }
     }
 
     Ok(())
@@ -246,12 +251,16 @@ fn handle_request(
     request: Request,
     db: Db,
     sender: mpsc::Sender<Result<Response, String>>,
-) -> Result<(), Error>
-{
+) -> Result<(), Error> {
     match request {
         Request::SubscribeAll { range } => {
-            let tree_names = db.tree_names().into_iter().filter(|n| n != b"__sled__default");
-            let stream_strings = tree_names.into_iter().map(|b| String::from_utf8(b).unwrap());
+            let tree_names = db
+                .tree_names()
+                .into_iter()
+                .filter(|n| n != b"__sled__default");
+            let stream_strings = tree_names
+                .into_iter()
+                .map(|b| String::from_utf8(b).unwrap());
             let stream_names = stream_strings.map(|s| EsStreamName::new(s).unwrap());
             let all_streams: Vec<_> = stream_names.map(|n| EsStream::new(n, range)).collect();
 
@@ -262,13 +271,15 @@ fn handle_request(
                 thread::Builder::new().spawn(|| {
                     let mut sender = sender;
 
-                    let subscribed = Response::Subscribed { stream: stream.name.clone() };
+                    let subscribed = Response::Subscribed {
+                        stream: stream.name.clone(),
+                    };
                     match sender.send(Ok(subscribed)).wait() {
                         Ok(s) => sender = s,
                         Err(_) => {
                             info!("encountered closed channel");
                             return;
-                        },
+                        }
                     }
 
                     if let Err(e) = send_stream_events(stream, tree, sender.clone()) {
@@ -288,13 +299,15 @@ fn handle_request(
                 thread::Builder::new().spawn(|| {
                     let mut sender = sender;
 
-                    let subscribed = Response::Subscribed { stream: stream.name.clone() };
+                    let subscribed = Response::Subscribed {
+                        stream: stream.name.clone(),
+                    };
                     match sender.send(Ok(subscribed)).wait() {
                         Ok(s) => sender = s,
                         Err(_) => {
                             info!("encountered closed channel");
                             return;
-                        },
+                        }
                     }
 
                     if let Err(e) = send_stream_events(stream, tree, sender.clone()) {
@@ -305,8 +318,12 @@ fn handle_request(
                     }
                 })?;
             }
-        },
-        Request::Publish { stream, event_name, event_data } => {
+        }
+        Request::Publish {
+            stream,
+            event_name,
+            event_data,
+        } => {
             let tree = db.open_tree(stream.clone().into_bytes())?;
 
             let event_number = new_event_number(&db, &stream)?;
@@ -320,7 +337,7 @@ fn handle_request(
             raw_event.extend_from_slice(&raw_data);
 
             if let Err(e) = tree.set(event_number.to_be_bytes(), raw_event) {
-                return Err(Error::InternalError(e))
+                return Err(Error::InternalError(e));
             }
 
             info!("{:?} {:?} {:?}", stream, event_name, event_number);
@@ -328,7 +345,7 @@ fn handle_request(
             if sender.send(Ok(Response::Ok)).wait().is_err() {
                 info!("encountered closed channel");
             }
-        },
+        }
         Request::LastEventNumber { stream } => {
             let key = db.get(&stream)?;
             let number = key.map(|k| EventNumber::try_from(k.as_ref()).unwrap());
@@ -337,12 +354,21 @@ fn handle_request(
             if sender.send(Ok(last_event_number)).wait().is_err() {
                 info!("encountered closed channel");
             }
-        },
+        }
         Request::StreamNames => {
-            let tree_names = db.tree_names().into_iter().filter(|n| n != b"__sled__default");
-            let stream_strings = tree_names.into_iter().map(|b| String::from_utf8(b).unwrap());
-            let stream_names = stream_strings.map(|s| EsStreamName::new(s).unwrap()).collect();
-            let streams = Response::StreamNames { streams: stream_names };
+            let tree_names = db
+                .tree_names()
+                .into_iter()
+                .filter(|n| n != b"__sled__default");
+            let stream_strings = tree_names
+                .into_iter()
+                .map(|b| String::from_utf8(b).unwrap());
+            let stream_names = stream_strings
+                .map(|s| EsStreamName::new(s).unwrap())
+                .collect();
+            let streams = Response::StreamNames {
+                streams: stream_names,
+            };
 
             if sender.send(Ok(streams)).wait().is_err() {
                 info!("encountered closed channel");
@@ -367,8 +393,8 @@ fn init_sentry() {
 
 #[cfg(feature = "vigil")]
 fn init_vigil() {
-    use vigil::Reporter;
     use std::{env, time::Duration};
+    use vigil::Reporter;
 
     let endpoint = env::var("VIGIL_ENDPOINT").expect("VIGIL_ENDPOINT");
     let token = env::var("VIGIL_TOKEN").expect("VIGIL_TOKEN");
@@ -392,10 +418,18 @@ fn main() {
     let opt = Opt::from_args();
 
     #[cfg(feature = "sentry")]
-    { if !opt.no_sentry { init_sentry(); } }
+    {
+        if !opt.no_sentry {
+            init_sentry();
+        }
+    }
 
     #[cfg(feature = "vigil")]
-    { if !opt.no_vigil { init_vigil(); } }
+    {
+        if !opt.no_vigil {
+            init_vigil();
+        }
+    }
 
     if !cfg!(feature = "sentry") || opt.no_sentry {
         let _ = env_logger::init();
@@ -413,7 +447,9 @@ fn main() {
     let mut builder = ConfigBuilder::new().path(opt.db_path);
 
     if let Some(compression_factor) = opt.compression_factor {
-        builder = builder.use_compression(true).compression_factor(compression_factor);
+        builder = builder
+            .use_compression(true)
+            .compression_factor(compression_factor);
     }
 
     let config = builder.build();
@@ -464,13 +500,13 @@ fn main() {
                 })
                 .forward(writer)
                 .map_err(|error| {
-                    use ResponseMsgError::RespMsgError;
                     use crate::RespMsgError::IoError;
+                    use ResponseMsgError::RespMsgError;
 
                     match error {
                         RespMsgError(IoError(ref e)) if e.kind() == ErrorKind::BrokenPipe => {
                             info!("{}", e);
-                        },
+                        }
                         other => error!("{}", other),
                     }
                 })

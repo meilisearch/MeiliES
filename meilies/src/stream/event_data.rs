@@ -1,4 +1,4 @@
-use crate::resp::{RespValue, FromResp, RespBytesConvertError};
+use crate::resp::{FromResp, RespBytesConvertError, RespValue};
 use std::{fmt, str};
 
 #[derive(Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]

@@ -2,17 +2,17 @@ use std::{fmt, num, str};
 
 use bytes::{BufMut, BytesMut};
 use subslice::SubsliceExt;
-use tokio::codec::{Encoder, Decoder};
+use tokio::codec::{Decoder, Encoder};
 use tokio::io;
 
 use super::RespValue;
 
 const CRLF_NEWLINE: &[u8; 2] = &[b'\r', b'\n'];
-const SIMPLE_STRING_CHAR:  u8 = b'+';
-const ERROR_CHAR:          u8 = b'-';
-const INTEGER_CHAR:        u8 = b':';
-const BULK_STRING_CHAR:    u8 = b'$';
-const ARRAY_CHAR:          u8 = b'*';
+const SIMPLE_STRING_CHAR: u8 = b'+';
+const ERROR_CHAR: u8 = b'-';
+const INTEGER_CHAR: u8 = b':';
+const BULK_STRING_CHAR: u8 = b'$';
+const ARRAY_CHAR: u8 = b'*';
 
 #[derive(Debug)]
 pub enum RespMsgError {
@@ -72,7 +72,7 @@ fn decode_simple_string(buf: &[u8]) -> Result<Option<(RespValue, usize)>, RespMs
             let string = str::from_utf8(bytes_string)?;
             let advance = bytes_string.len() + CRLF_NEWLINE.len();
             Ok(Some((RespValue::SimpleString(string.to_owned()), advance)))
-        },
+        }
         None => Ok(None),
     }
 }
@@ -83,7 +83,7 @@ fn decode_error(buf: &[u8]) -> Result<Option<(RespValue, usize)>, RespMsgError> 
             let string = str::from_utf8(bytes_string)?;
             let advance = bytes_string.len() + CRLF_NEWLINE.len();
             Ok(Some((RespValue::Error(string.to_owned()), advance)))
-        },
+        }
         None => Ok(None),
     }
 }
@@ -95,7 +95,7 @@ fn decode_integer(buf: &[u8]) -> Result<Option<(RespValue, usize)>, RespMsgError
             let integer = i64::from_str_radix(string, 10)?;
             let advance = bytes_string.len() + CRLF_NEWLINE.len();
             Ok(Some((RespValue::Integer(integer), advance)))
-        },
+        }
         None => Ok(None),
     }
 }
@@ -121,14 +121,12 @@ fn decode_bulk_string(buf: &[u8]) -> Result<Option<(RespValue, usize)>, RespMsgE
 
                         let advance = advance + bytes.len() + CRLF_NEWLINE.len();
                         Ok(Some((RespValue::BulkString(bytes), advance)))
-
-                    }
-                    else {
+                    } else {
                         Ok(None)
                     }
-                },
+                }
             }
-        },
+        }
         None => Ok(None),
     }
 }
@@ -150,30 +148,32 @@ fn decode_array(buf: &[u8]) -> Result<Option<(RespValue, usize)>, RespMsgError> 
                             Ok(Some((msg, adv))) => {
                                 array.push(msg);
                                 advance += adv;
-                            },
+                            }
                             Ok(None) => return Ok(None),
                             Err(e) => return Err(e),
                         }
                     }
 
                     Ok(Some((RespValue::Array(array), advance)))
-                },
+                }
             }
-        },
+        }
         None => Ok(None),
     }
 }
 
 fn decode_message(buf: &[u8]) -> Result<Option<(RespValue, usize)>, RespMsgError> {
-    if buf.is_empty() { return Ok(None) }
+    if buf.is_empty() {
+        return Ok(None);
+    }
 
     let result = match buf[0] {
         SIMPLE_STRING_CHAR => decode_simple_string(&buf[1..]),
-        ERROR_CHAR         => decode_error(&buf[1..]),
-        INTEGER_CHAR       => decode_integer(&buf[1..]),
-        BULK_STRING_CHAR   => decode_bulk_string(&buf[1..]),
-        ARRAY_CHAR         => decode_array(&buf[1..]),
-        invalid_byte       => Err(RespMsgError::InvalidPrefixByte(invalid_byte)),
+        ERROR_CHAR => decode_error(&buf[1..]),
+        INTEGER_CHAR => decode_integer(&buf[1..]),
+        BULK_STRING_CHAR => decode_bulk_string(&buf[1..]),
+        ARRAY_CHAR => decode_array(&buf[1..]),
+        invalid_byte => Err(RespMsgError::InvalidPrefixByte(invalid_byte)),
     };
 
     match result {
@@ -195,7 +195,7 @@ impl Decoder for RespCodec {
             Ok(Some((msg, advance))) => {
                 buf.split_to(advance);
                 Ok(Some(msg))
-            },
+            }
             Ok(None) => Ok(None),
             Err(e) => Err(e),
         }
@@ -210,7 +210,7 @@ impl Encoder for RespCodec {
         match msg {
             RespValue::SimpleString(string) => {
                 if string.as_bytes().find(CRLF_NEWLINE).is_some() {
-                    return Err(RespMsgError::SimpleStringContainCrlf)
+                    return Err(RespMsgError::SimpleStringContainCrlf);
                 }
 
                 buf.reserve(1 + string.len() + CRLF_NEWLINE.len());
@@ -220,10 +220,10 @@ impl Encoder for RespCodec {
                 buf.put(&CRLF_NEWLINE[..]);
 
                 Ok(())
-            },
+            }
             RespValue::Error(string) => {
                 if string.as_bytes().find(CRLF_NEWLINE).is_some() {
-                    return Err(RespMsgError::SimpleStringContainCrlf)
+                    return Err(RespMsgError::SimpleStringContainCrlf);
                 }
 
                 buf.reserve(1 + string.len() + CRLF_NEWLINE.len());
@@ -233,7 +233,7 @@ impl Encoder for RespCodec {
                 buf.put(&CRLF_NEWLINE[..]);
 
                 Ok(())
-            },
+            }
             RespValue::Integer(integer) => {
                 let integer_string = integer.to_string();
                 buf.reserve(1 + integer_string.len() + CRLF_NEWLINE.len());
@@ -243,7 +243,7 @@ impl Encoder for RespCodec {
                 buf.put(&CRLF_NEWLINE[..]);
 
                 Ok(())
-            },
+            }
             RespValue::BulkString(bytes_string) => {
                 let length = bytes_string.len();
                 let integer_string = length.to_string();
@@ -256,7 +256,7 @@ impl Encoder for RespCodec {
                 buf.put(&CRLF_NEWLINE[..]);
 
                 Ok(())
-            },
+            }
             RespValue::Array(array) => {
                 let length = array.len();
                 let integer_string = length.to_string();
@@ -271,7 +271,7 @@ impl Encoder for RespCodec {
                 }
 
                 Ok(())
-            },
+            }
             RespValue::Nil => {
                 // We chose to use the Bulk String to represent nil values.
                 let integer_string = "-1";

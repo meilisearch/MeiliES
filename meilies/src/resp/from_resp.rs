@@ -1,6 +1,6 @@
-use std::string::FromUtf8Error;
-use std::fmt;
 use super::RespValue;
+use std::fmt;
+use std::string::FromUtf8Error;
 
 pub trait FromResp: Sized {
     type Error;
@@ -25,9 +25,10 @@ impl fmt::Display for RespStringConvertError {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         use RespStringConvertError::*;
         match self {
-            InvalidRespType => {
-                write!(f, "invalid RESP type found, expected String, Error or BulkString")
-            },
+            InvalidRespType => write!(
+                f,
+                "invalid RESP type found, expected String, Error or BulkString"
+            ),
             InvalidUtf8String(e) => write!(f, "invalid UTF8 string; {}", e),
         }
     }
@@ -57,7 +58,7 @@ impl fmt::Display for RespIntConvertError {
         match self {
             RespIntConvertError::InvalidRespType => {
                 write!(f, "invalid RESP type found, expected Integer")
-            },
+            }
         }
     }
 }
@@ -81,9 +82,10 @@ pub enum RespBytesConvertError {
 impl fmt::Display for RespBytesConvertError {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         match self {
-            RespBytesConvertError::InvalidRespType => {
-                write!(f, "invalid RESP type found, expected String, Error or BulkString")
-            },
+            RespBytesConvertError::InvalidRespType => write!(
+                f,
+                "invalid RESP type found, expected String, Error or BulkString"
+            ),
         }
     }
 }
@@ -111,12 +113,8 @@ impl<E: fmt::Display> fmt::Display for RespVecConvertError<E> {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         use RespVecConvertError::*;
         match self {
-            InvalidRespType => {
-                write!(f, "invalid RESP type found, expected Array")
-            },
-            InnerRespConvertError(e) => {
-                write!(f, "inner RESP type convertion error: {}", e)
-            },
+            InvalidRespType => write!(f, "invalid RESP type found, expected Array"),
+            InnerRespConvertError(e) => write!(f, "inner RESP type convertion error: {}", e),
         }
     }
 }
@@ -128,9 +126,10 @@ impl<T: FromResp> FromResp for Vec<T> {
         use RespVecConvertError::*;
         match value {
             RespValue::Array(array) => {
-                let result: Result<Vec<_>, _> = array.into_iter().map(|e| T::from_resp(e)).collect();
+                let result: Result<Vec<_>, _> =
+                    array.into_iter().map(|e| T::from_resp(e)).collect();
                 result.map_err(InnerRespConvertError)
-            },
+            }
             _ => Err(InvalidRespType),
         }
     }
