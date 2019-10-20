@@ -11,7 +11,7 @@ use meilies::stream::Stream as EsStream;
 use meilies_client::{paired_connect, sub_connect};
 
 #[derive(Debug, StructOpt)]
-#[structopt(name = "meilies-cli", about = "A basic cli for MeiliES.")]
+#[structopt(name = "meilies-cli", about = "A basic cli for MeiliES.", author)]
 struct Opt {
     /// Server hostname.
     #[structopt(short = "h", long = "hostname", default_value = "127.0.0.1")]
