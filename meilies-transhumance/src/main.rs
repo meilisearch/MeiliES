@@ -11,7 +11,8 @@ use structopt::StructOpt;
 #[derive(Debug, StructOpt)]
 #[structopt(
     name = "meilies-transhumance",
-    about = "A basic migration tool for MeiliES."
+    about = "A basic migration tool for MeiliES.",
+    author
 )]
 struct Opt {
     /// Source server address (i.e. localhost:6480).

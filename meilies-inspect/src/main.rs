@@ -12,7 +12,8 @@ use structopt::StructOpt;
 #[derive(Debug, StructOpt)]
 #[structopt(
     name = "meilies-inspect",
-    about = "A cli to inspect MeiliES events by executing a command on each event."
+    about = "A cli to inspect MeiliES events by executing a command on each event.",
+    author
 )]
 struct Opt {
     /// Server hostname.

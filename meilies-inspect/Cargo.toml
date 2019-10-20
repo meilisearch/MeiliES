@@ -8,5 +8,5 @@ edition = "2018"
 futures = "0.1.26"
 meilies = "0.2.0"
 meilies-client = "0.2.0"
-structopt = { version = "0.2.15", default-features = false }
+structopt = { version = "0.3.3", default-features = false }
 tokio = "0.1.19"

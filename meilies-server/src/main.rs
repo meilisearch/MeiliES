@@ -3,12 +3,11 @@ use std::fmt;
 use std::io::{Error as IoError, ErrorKind};
 use std::net::SocketAddr;
 use std::path::PathBuf;
-use std::sync::Arc;
 use std::thread;
 use std::time::Instant;
 
 use log::{error, info};
-use sled::{ConfigBuilder, Db, Event, IVec, Tree};
+use sled::{Config, Db, Event, IVec, Tree};
 use structopt::StructOpt;
 use tokio::codec::Decoder;
 use tokio::net::TcpListener;
@@ -34,7 +33,7 @@ fn new_event_number(numbers: &Tree, name: &EsStreamName) -> sled::Result<EventNu
 }
 
 #[derive(Debug, StructOpt)]
-#[structopt(name = "meilies-server", about = "Start the server")]
+#[structopt(name = "meilies-server", about = "Start the server", author)]
 struct Opt {
     /// Server hostname.
     #[structopt(short = "h", long = "hostname", default_value = "127.0.0.1")]
@@ -104,7 +103,7 @@ impl From<IoError> for Error {
 
 fn send_stream_events(
     stream: EsStream,
-    tree: Arc<Tree>,
+    tree: Tree,
     mut sender: mpsc::Sender<Result<Response, String>>,
 ) -> sled::Result<()> {
     info!("blocking subscription on {} spawned", stream);
@@ -114,9 +113,9 @@ fn send_stream_events(
             let mut next_number = EventNumber(from);
             let mut watcher = tree.watch_prefix(vec![]);
 
-            for result in tree.scan(next_number.to_be_bytes()) {
+            for result in tree.scan_prefix(next_number.to_be_bytes()) {
                 let (key, value) = result?;
-                let number = EventNumber::try_from(key.as_slice()).unwrap();
+                let number = EventNumber::try_from(key.as_ref()).unwrap();
 
                 let raw_event = RawEvent::new(value);
                 let event = Response::Event {
@@ -139,8 +138,8 @@ fn send_stream_events(
             }
 
             for event in watcher {
-                if let Event::Set(key, value) = event {
-                    let number = EventNumber::try_from(key.as_slice()).unwrap();
+                if let Event::Insert(key, value) = event {
+                    let number = EventNumber::try_from(key.as_ref()).unwrap();
                     if number >= next_number {
                         let raw_event = RawEvent::new(value);
                         let event = Response::Event {
@@ -168,7 +167,7 @@ fn send_stream_events(
 
             for result in tree.range(next_number.to_be_bytes()..to_event_number.to_be_bytes()) {
                 let (key, value) = result?;
-                let number = EventNumber::try_from(key.as_slice()).unwrap();
+                let number = EventNumber::try_from(key.as_ref()).unwrap();
 
                 let raw_event = RawEvent::new(value);
                 let event = Response::Event {
@@ -194,8 +193,8 @@ fn send_stream_events(
             }
 
             for event in watcher {
-                if let Event::Set(key, value) = event {
-                    let number = EventNumber::try_from(key.as_slice()).unwrap();
+                if let Event::Insert(key, value) = event {
+                    let number = EventNumber::try_from(key.as_ref()).unwrap();
                     if number >= to_event_number {
                         return Ok(());
                     }
@@ -223,11 +222,11 @@ fn send_stream_events(
             let watcher = tree.watch_prefix(vec![]);
 
             for event in watcher {
-                if let Event::Set(key, value) = event {
+                if let Event::Insert(key, value) = event {
                     let raw_event = RawEvent::new(value);
                     let event = Response::Event {
                         stream: stream.name.clone(),
-                        number: EventNumber::try_from(key.as_slice()).unwrap(),
+                        number: EventNumber::try_from(key.as_ref()).unwrap(),
                         event_name: raw_event.name().unwrap(),
                         event_data: raw_event.data(),
                     };
@@ -336,7 +335,7 @@ fn handle_request(
             raw_event.extend_from_slice(&raw_name);
             raw_event.extend_from_slice(&raw_data);
 
-            if let Err(e) = tree.set(event_number.to_be_bytes(), raw_event) {
+            if let Err(e) = tree.insert(event_number.to_be_bytes(), raw_event) {
                 return Err(Error::InternalError(e));
             }
 
@@ -444,17 +443,15 @@ fn main() {
 
     let now = Instant::now();
 
-    let mut builder = ConfigBuilder::new().path(opt.db_path);
+    let mut config = Config::new().path(opt.db_path);
 
     if let Some(compression_factor) = opt.compression_factor {
-        builder = builder
+        config = config
             .use_compression(true)
             .compression_factor(compression_factor);
     }
 
-    let config = builder.build();
-
-    let db = match Db::start(config) {
+    let db = match config.open() {
         Ok(db) => db,
         Err(e) => return error!("error opening database; {}", e),
     };

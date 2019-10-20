@@ -10,5 +10,5 @@ log = "0.4.6"
 meilies = { version = "0.2.0", path = "../meilies" }
 meilies-client = { version = "0.2.0", path = "../meilies-client" }
 stderrlog = "0.4.1"
-structopt = { version = "0.2.15", default-features = false }
+structopt = { version = "0.3.3", default-features = false }
 tokio = "0.1.19"
