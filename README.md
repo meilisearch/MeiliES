@@ -30,6 +30,8 @@
 
 ## Introduction
 
+_This project is no more maintained, please consider finding another tool instead._
+
 MeiliES is an _Event Sourcing database_ that uses the _RESP_ (REdis Serialization Protocol) to communicate.
 This way it is possible to create clients by reusing the already available protocol. For example, it is possible to use [the official Redis command line interface](https://redis.io/topics/rediscli) program to communicate with MeiliES. There is [a release blog post](https://blog.meilisearch.com/meilies-release/) if you want to know more.
 
